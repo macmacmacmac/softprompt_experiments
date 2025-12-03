@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "softprompt_experiments"
+version = "0.1.0"
+description = "softprompt_experiments project"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{ name = "Your Name" }]
+
+dependencies = [
+    "argparse",
+    "importlib",
+    "pandas",
+    "numpy",
+    "torch",
+    "peft",
+    "transformers",
+    "tqdm",
+    "matplotlib",
+    "scipy",
+    "python-dotenv",
+    "huggingface_hub",
+    "datasets",
+    "scikit-learn",
+    "openai",
+    "tiktoken",
+    "sentencepiece",
+    "nltk"
+]
+
+# Optional but recommended: explicitly define where packages live.
+# If your project follows a *flat* layout like:
+# softprompt_experiments/
+#    setup.py
+#    softprompt_experiments/
+# then leave this section commented out.
+#
+# If your project uses a /src layout:
+# src/softprompt_experiments/
+# then uncomment the following:
+#
+
+[tool.setuptools.packages.find]
+where = ["src"]

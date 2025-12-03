@@ -1,0 +1,178 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from torch.optim import AdamW, Adam
+import random
+import os
+import copy
+
+class SoftPrompt(nn.Module):
+    def __init__(self, model, tokenizer, word_embeddings, path_to_model=None, num_tokens=8):
+        super().__init__()
+
+        self.tokenizer = tokenizer
+        self.model = model
+        self.word_embeddings = word_embeddings
+
+        self.num_tokens = num_tokens
+
+        self.prompt_embeddings = None
+        self.initial_tokens = None
+        self.initial_embedings = None
+
+        if path_to_model is None:
+            # initialize embeddings
+            vocab_size = word_embeddings.num_embeddings
+            init_token_ids = torch.randint(
+                0,vocab_size,(self.num_tokens,), dtype=torch.long
+            ).to(model.device)
+            word_embedding_weights = word_embeddings(init_token_ids).detach().clone().to(model.dtype)
+            
+            self.prompt_embeddings = nn.Parameter(word_embedding_weights.to(model.device))
+            self.initial_tokens = copy.deepcopy(init_token_ids)
+            self.initial_embedings = copy.deepcopy(word_embedding_weights)
+        else:
+            self.load_softprompt(path_to_model)
+    
+    def forward(self):
+        return self.embeddings.unsqueeze(0)  # [1, num_tokens, embed_dim]
+    
+    def generate_from_embeds(self, embeds, max_new_tokens=20, do_sample=False, suffix_str=None):
+        """
+        Generate text given softprompt embeddings.
+        Args:
+            model: HuggingFace causal LM
+            tokenizer: tokenizer
+            embeds: [1, seq_len, hidden_dim] softprompt embeddings
+            max_new_tokens: number of tokens to generate
+            do_sample: whether to sample or use greedy decoding
+            suffix_str: some string to be appended after the embeds
+        Returns:
+            generated string
+        """
+        with torch.no_grad():
+            if suffix_str:
+                ids = self.tokenizer(suffix_str, return_tensors="pt").input_ids.to(self.model.device)
+                suffix_embs = self.word_embeddings(ids).to(dtype=self.model.dtype)
+                full_embs = torch.cat([
+                    embeds,
+                    suffix_embs
+                ], dim=1)
+                output_ids = self.model.generate(
+                    inputs_embeds=full_embs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=do_sample,
+                    pad_token_id=self.tokenizer.eos_token_id
+                )
+            else:
+                output_ids = self.model.generate(
+                    inputs_embeds=embeds,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=do_sample,
+                    pad_token_id=self.tokenizer.eos_token_id
+                )
+
+        return self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+
+    def save_softprompt(self, path_to_save):
+        state_dict = {
+            'prompt_embeddings':self.forward(),
+            'initial_tokens':self.initial_tokens,
+            'initial_embeddings':self.initial_embeddings,
+            'num_tokens':self.num_tokens
+        }
+        torch.save(state_dict, os.path.join(path_to_save, "softprompt.pt"))
+    
+    def load_softprompt(self, path_to_load):
+        state_dict = torch.load(path_to_load)
+        self.initial_tokens = state_dict['initial_tokens']
+        self.initial_embeddings = state_dict['initial_embeddings']
+        self.num_tokens = state_dict['num_tokens']
+
+    def get_nearest_to_embeds(self, distance='cosine'):
+        """
+            Retrieves the discrete, nearest hard tokens to the prompt embeddings
+            Args:
+                distance: either 'l2' or 'cosine' defaults to l2
+            Returns:
+                nearest_idx: nearest token ids
+                discrete_prompt: decoded nearest token ids
+        """
+        with torch.no_grad():
+            prompt_embedding = self.forward().squeeze(0) #[num_tokens, embed_dim]
+            base_embedding = self.word_embeddings
+
+            # print(prompt_embedding.shape) #8 by 4096
+            # print(base_embedding) # 128256 by 4096
+
+            norm_base = torch.nn.functional.normalize(base_embedding, dim=1)
+            norm_embed = torch.nn.functional.normalize(prompt_embedding, dim=1)
+
+            cos_sim = norm_embed @ norm_base.T
+            nearest_idx = torch.argmax(cos_sim, dim=1).cpu().tolist()
+
+            discrete_prompt = self.tokenizer.decode(nearest_idx)
+
+        return nearest_idx, discrete_prompt
+    
+    def get_nearest_to_logits(self, k):
+        """
+            Retrieves of the k likeliest predicted next-prompt tokens based on logit probs
+            Args:
+                k: number of candidate predictions to return per prompt token
+            Returns:
+                decodeds: the decoded k likeliest predicted next prompt tokens
+                topk_vals: their respective probabilities
+        """
+        with torch.no_grad():
+            prompt_embedding = self.forward().squeeze(0) #[num_tokens, embed_dim]
+            base_embedding = self.word_embeddings
+
+            logits, probs = self.get_prompt_logits()
+            topk_vals, topk_idx = probs.topk(k, dim=-1)
+
+            decodeds = []
+            for i in range(logits.size(0)):
+                toks = [self.tokenizer.decode([tid]) for tid in topk_idx[i]]
+                decodeds.append(toks)
+        return decodeds, topk_vals
+    
+    def _get_prompt_logits(self):
+        prompt_embeds = self.forward()
+        logits = self.model(inputs_embeds=prompt_embeds, output_hidden_states=False, use_cache=False).logits
+        logits = logits[:, :self.num_tokens-1, :]  # align with next-token positions
+        probs = F.softmax(logits, dim=-1)
+
+        return logits, probs
+
+    def get_prompt_logits(self):
+        """
+            Retrieves the last hidden state logits for each prompt token except for the last
+            Returns:
+                logits: the raw unnormalized logits
+                probs: the token probabilities
+        """
+        with torch.no_grad():
+            logits, probs = self._get_prompt_logits()
+        return logits, probs
+    
+    def get_parsability(self):
+        """
+        Negative mean cosine similarity between input embeddings and predicted next-token embeddings.
+        Returns a tensor for backprop.
+        """
+        prefix_embed = self.forward()
+
+        logits, probs = self._get_prompt_logits()
+
+        vocab_embed_mat = self.word_embeddings.weight
+        weighted_avg = probs @ vocab_embed_mat  # [1, seq_len-1, hidden_dim]
+        weighted_avg = weighted_avg.squeeze(0)
+
+        cos = F.cosine_similarity(prefix_embed[1:], weighted_avg, dim=-1)  # [seq_len-1]
+        return -cos.mean()  # negative for loss minimization
+
+
+
+        
