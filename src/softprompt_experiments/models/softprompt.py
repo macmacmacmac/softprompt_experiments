@@ -8,7 +8,15 @@ import os
 import copy
 
 class SoftPrompt(nn.Module):
-    def __init__(self, model, tokenizer, word_embeddings, path_to_model=None, num_tokens=8):
+    """
+    An implementation of softprompt for prompt-tuning, subclasses nn.Module
+    - model: a huggingface decoder model
+    - word_embeddings: it's word_embedding matrix from model.get_input_embeddings
+    - tokenizer: the tokenizer to be used
+    - path_to_model: if passed, loads a saved softprompt model instead of initializing one
+    - num_tokens: number of virtual tokens in the softprompt
+    """
+    def __init__(self, model=None, tokenizer=None, word_embeddings=None, path_to_model=None, num_tokens=8):
         super().__init__()
 
         self.tokenizer = tokenizer
@@ -19,7 +27,7 @@ class SoftPrompt(nn.Module):
 
         self.prompt_embeddings = None
         self.initial_tokens = None
-        self.initial_embedings = None
+        self.initial_embeddings = None
 
         if path_to_model is None:
             # initialize embeddings
@@ -31,19 +39,25 @@ class SoftPrompt(nn.Module):
             
             self.prompt_embeddings = nn.Parameter(word_embedding_weights.to(model.device))
             self.initial_tokens = copy.deepcopy(init_token_ids)
-            self.initial_embedings = copy.deepcopy(word_embedding_weights)
+            self.initial_embeddings = copy.deepcopy(word_embedding_weights)
         else:
             self.load_softprompt(path_to_model)
     
     def forward(self):
-        return self.embeddings.unsqueeze(0)  # [1, num_tokens, embed_dim]
+        return self.prompt_embeddings.unsqueeze(0)  # [1, num_tokens, embed_dim]
+
+    def loss_fn(self, input_embeds, labels):
+        outputs = self.model(
+            inputs_embeds=input_embeds,
+            attention_mask=None,    # attention is fully allowed
+            labels=labels   # HF automatically computes CE
+        )
+        return outputs.loss
     
     def generate_from_embeds(self, embeds, max_new_tokens=20, do_sample=False, suffix_str=None):
         """
         Generate text given softprompt embeddings.
         Args:
-            model: HuggingFace causal LM
-            tokenizer: tokenizer
             embeds: [1, seq_len, hidden_dim] softprompt embeddings
             max_new_tokens: number of tokens to generate
             do_sample: whether to sample or use greedy decoding
@@ -72,8 +86,10 @@ class SoftPrompt(nn.Module):
                     do_sample=do_sample,
                     pad_token_id=self.tokenizer.eos_token_id
                 )
-
-        return self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        output = self.tokenizer.batch_decode(
+            output_ids, skip_special_tokens=True
+        )
+        return output
 
     def save_softprompt(self, path_to_save):
         state_dict = {
@@ -85,7 +101,7 @@ class SoftPrompt(nn.Module):
         torch.save(state_dict, os.path.join(path_to_save, "softprompt.pt"))
     
     def load_softprompt(self, path_to_load):
-        state_dict = torch.load(path_to_load)
+        state_dict = torch.load(os.path.join(path_to_load, "softprompt.pt"))
         self.initial_tokens = state_dict['initial_tokens']
         self.initial_embeddings = state_dict['initial_embeddings']
         self.num_tokens = state_dict['num_tokens']

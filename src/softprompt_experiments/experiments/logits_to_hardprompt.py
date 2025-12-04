@@ -7,11 +7,10 @@ from transformers import (
 )
 from tqdm.auto import tqdm
 
-from softprompt_experiments.models.softprompt import SoftPrompt
+from softprompt_experiments import SoftPrompt
 from softprompt_experiments.utils import (
-    get_train_test_from_tokenized, 
-    train_softprompt_from_tokenized,
-    log_json
+    get_train_test_from_softprompts,
+    train_softprompt
 )
 
 def run(args_list):
@@ -24,11 +23,12 @@ def run(args_list):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--epochs", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--num_tokens", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
     parser.add_argument("--verbose", type=bool, default=False)
+
     args = parser.parse_args(args_list)
 
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
@@ -63,32 +63,21 @@ def run(args_list):
     else:
         raise ValueError("path to directory has no datasets")
 
-    for dataset_dir in dataset_dirs:
-        train_dataset, test_dataset, train_loader, test_loader = get_train_test_from_tokenized(
-            word_embeddings,
-            dataset_dir,
-            BATCH_SIZE,
-            train_portion = 0.8
-        )
+    train_dataset, test_dataset, train_loader, test_loader = get_train_test_from_softprompts(
+        tokenizer,
+        dataset_dirs,
+        BATCH_SIZE,
+        train_portion = 0.8
+    )
 
-        # subclasses nn.Module, forward call will get the prompt embeddings
-        softprompt = SoftPrompt(
-            model=model, 
-            tokenizer=tokenizer, 
-            word_embeddings=word_embeddings, 
-            num_tokens=NUM_TOKENS
-        )
-        
-        train_loss, test_loss = train_softprompt(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
+    softprompt = SoftPrompt(
+        model=model,
+        tokenizer=tokenizer,
+        word_embeddings=word_embeddings,
+        num_tokens=NUM_TOKENS
+    )
 
-        performance = {
-            'hardprompt':torch.load(dataset_dir)['hardprompt'],
-            'train loss':train_loss,
-            'test_loss':test_loss
-        }
-        log_json(os.path.join(dataset_dir,'softprompt_performance.json'), performance)
-        
-        softprompt.save_softprompt(dataset_dir)
+    train_softprompt(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
 
     print(
         "\n","="*100, "\n", 

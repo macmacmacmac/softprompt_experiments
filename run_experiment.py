@@ -3,20 +3,18 @@ import argparse
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--experiment", required=True, help="Name of experiment module")
-    args = parser.parse_args()
+    parser.add_argument("--experiment", required=True, help="Which experiment module to run")
+    args, unknown = parser.parse_known_args()  # capture extra args for the experiment
 
+    # Dynamically import the experiment module
     module_name = f"softprompt_experiments.experiments.{args.experiment}"
+    exp_module = importlib.import_module(module_name)
 
-    try:
-        exp = importlib.import_module(module_name)
-    except ModuleNotFoundError:
-        raise ValueError(f"Experiment '{args.experiment}' not found.")
+    if not hasattr(exp_module, "run"):
+        raise ValueError(f"Experiment '{args.experiment}' must have a run(args) function.")
 
-    if not hasattr(exp, "run"):
-        raise ValueError(f"Experiment '{args.experiment}' has no run() function.")
-
-    exp.run()
+    # Forward unknown args to the experiment's own parser
+    exp_module.run(unknown)
 
 if __name__ == "__main__":
     main()
