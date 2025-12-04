@@ -21,7 +21,7 @@ def run(args_list):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_datasets", type=int, default=10)
-    parser.add_argument("--num_samples_per_dataset", type=int, default=1000)
+    parser.add_argument("--num_samples_per_dataset", type=int, default=500)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
     args = parser.parse_args(args_list)
 

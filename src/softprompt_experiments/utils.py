@@ -397,13 +397,17 @@ def eval_softprompt(softprompt: SoftPrompt, test_dataset: TensorDataset):
         # for generations without the target so we're not snooping ahead
         full_ids = full_ids.to(device)
         labels = labels.to(device)        
+
+        target_idxs = (labels != -100)
         input_idxs = (labels == -100).to(device)
         only_input_ids = full_ids[input_idxs].unsqueeze(0) #[1, seq_len-target_len]
-        input_embeds = word_embeddings(full_ids).to(dtype=dtype).unsqueeze(0)
 
+        input_embeds = word_embeddings(only_input_ids).to(dtype=dtype)
+
+        max_new_tokens = len(full_ids) - len(full_ids[input_idxs])
         generation = softprompt.generate_from_embeds(
             input_embeds,
-            max_new_tokens=len(full_ids)
+            max_new_tokens=max_new_tokens
         )[0]
         full_sequence = tokenizer.decode(full_ids, skip_special_tokens=True)
 

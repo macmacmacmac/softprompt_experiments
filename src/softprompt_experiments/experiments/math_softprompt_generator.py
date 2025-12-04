@@ -25,7 +25,7 @@ def run(args_list):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--epochs", type=int, default=24)
+    parser.add_argument("--epochs", type=int, default=6)
     parser.add_argument("--num_tokens", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
