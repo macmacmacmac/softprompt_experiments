@@ -6,7 +6,6 @@ from torch.optim import AdamW, Adam
 import random
 import os
 import copy
-
 class SoftPrompt(nn.Module):
     """
     An implementation of softprompt for prompt-tuning, subclasses nn.Module
@@ -54,7 +53,7 @@ class SoftPrompt(nn.Module):
         )
         return outputs.loss
     
-    def generate_from_embeds(self, embeds, max_new_tokens=20, do_sample=False, suffix_str=None):
+    def generate_from_embeds(self, embeds, max_new_tokens=20, do_sample=True, suffix_str=None):
         """
         Generate text given softprompt embeddings.
         Args:
@@ -66,26 +65,22 @@ class SoftPrompt(nn.Module):
             generated string
         """
         with torch.no_grad():
+            sp_embeds = self.forward()   # [1, soft_len, dim]
+            sp_embeds = sp_embeds.expand(len(embeds), -1, -1) #[batchsize, soft_len, dim]
+            full_embs = torch.cat([sp_embeds,embeds],dim=1)
             if suffix_str:
                 ids = self.tokenizer(suffix_str, return_tensors="pt").input_ids.to(self.model.device)
                 suffix_embs = self.word_embeddings(ids).to(dtype=self.model.dtype)
-                full_embs = torch.cat([
-                    embeds,
-                    suffix_embs
-                ], dim=1)
-                output_ids = self.model.generate(
-                    inputs_embeds=full_embs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=do_sample,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-            else:
-                output_ids = self.model.generate(
-                    inputs_embeds=embeds,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=do_sample,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
+                full_embs = torch.cat([full_embs, suffix_embs], dim=1)
+            attention_mask = torch.ones(full_embs.size()[:-1], device=full_embs.device, dtype=torch.long)
+            output_ids = self.model.generate(
+                inputs_embeds=full_embs,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+            
         output = self.tokenizer.batch_decode(
             output_ids, skip_special_tokens=True
         )

@@ -1,3 +1,1 @@
-from .models.SoftPrompt import SoftPrompt
-
-__all__ = ["Model"]
+from .models.softprompt import SoftPrompt

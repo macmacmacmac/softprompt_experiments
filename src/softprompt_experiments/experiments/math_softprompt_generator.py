@@ -11,6 +11,7 @@ from softprompt_experiments.models.softprompt import SoftPrompt
 from softprompt_experiments.utils import (
     get_train_test_from_tokenized, 
     train_softprompt_from_tokenized,
+    eval_softprompt,
     log_json
 )
 
@@ -24,7 +25,7 @@ def run(args_list):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--epochs", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=24)
     parser.add_argument("--num_tokens", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
@@ -59,13 +60,12 @@ def run(args_list):
 
     num_datasets = len(dataset_dirs)
     if num_datasets > 0:
-        print(f"found ({num_datasets}) datasets in directory")
+        print(f"\nFound ({num_datasets}) datasets in directory")
     else:
         raise ValueError("path to directory has no datasets")
 
-    for dataset_dir in dataset_dirs:
+    for dataset_dir in tqdm(dataset_dirs):
         train_dataset, test_dataset, train_loader, test_loader = get_train_test_from_tokenized(
-            word_embeddings,
             dataset_dir,
             BATCH_SIZE,
             train_portion = 0.8
@@ -79,15 +79,23 @@ def run(args_list):
             num_tokens=NUM_TOKENS
         )
         
-        train_loss, test_loss = train_softprompt(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
+        train_loss, test_loss = train_softprompt_from_tokenized(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
+
+        outputs = eval_softprompt(softprompt, test_dataset)
+
+        hardprompt = torch.load(
+            os.path.join(dataset_dir,'dataset.pt'),
+            weights_only=False
+        )['hardprompt']
 
         performance = {
-            'hardprompt':torch.load(dataset_dir)['hardprompt'],
+            'hardprompt':hardprompt,
             'train loss':train_loss,
-            'test_loss':test_loss
+            'test_loss':test_loss,
+            'outputs': outputs
         }
         log_json(os.path.join(dataset_dir,'softprompt_performance.json'), performance)
-        
+
         softprompt.save_softprompt(dataset_dir)
 
     print(

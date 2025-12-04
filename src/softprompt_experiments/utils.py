@@ -374,7 +374,6 @@ def train_softprompt_from_tokenized(
                 f"Train Loss: {final_train_loss:.4f} | "
                 f"Test Loss: {final_test_loss:.4f}"
             )
-
     return final_train_loss, final_test_loss
 
 def eval_softprompt(softprompt: SoftPrompt, test_dataset: TensorDataset):
@@ -390,14 +389,25 @@ def eval_softprompt(softprompt: SoftPrompt, test_dataset: TensorDataset):
     word_embeddings = softprompt.word_embeddings
     dtype = model.dtype
     device = model.device
+    outputs = []
     for full_ids, labels in test_dataset:
         # full_ids contains a sequence of [inputs;targets;padding]
         # labels masks out the inputs [mask;targets;padding]
         # we need to index the input_ids so we're only using the inputs
         # for generations without the target so we're not snooping ahead
+        full_ids = full_ids.to(device)
+        labels = labels.to(device)        
+        input_idxs = (labels == -100).to(device)
+        only_input_ids = full_ids[input_idxs].unsqueeze(0) #[1, seq_len-target_len]
+        input_embeds = word_embeddings(full_ids).to(dtype=dtype).unsqueeze(0)
 
-        input_idxs = labels == -100
-        only_input_ids = full_ids[input_idxs]
-        input_embeds = word_embeddings(full_ids).to(dtype=dtype)  #
+        generation = softprompt.generate_from_embeds(
+            input_embeds,
+            max_new_tokens=len(full_ids)
+        )[0]
+        full_sequence = tokenizer.decode(full_ids, skip_special_tokens=True)
 
-        softprompt.generate_from_em
+        output = f"Full sequence: {full_sequence}\nGeneration: {generation}"
+        outputs.append(output)
+    return outputs
+
