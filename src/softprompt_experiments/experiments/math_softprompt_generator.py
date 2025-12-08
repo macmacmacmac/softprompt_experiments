@@ -8,6 +8,7 @@ from transformers import (
 from tqdm.auto import tqdm
 
 from softprompt_experiments.models.softprompt import SoftPrompt
+from softprompt_experiments.models.squishyprompt import SquishyPrompt
 from softprompt_experiments.utils import (
     get_train_test_from_tokenized, 
     train_softprompt_from_tokenized,
@@ -28,7 +29,9 @@ def run(args_list):
     parser.add_argument("--epochs", type=int, default=6)
     parser.add_argument("--num_tokens", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--lambd", type=float, default=1.)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
+    parser.add_argument("--use_parsability", type=bool, default=False)
     parser.add_argument("--verbose", type=bool, default=False)
     args = parser.parse_args(args_list)
 
@@ -38,6 +41,7 @@ def run(args_list):
     EPOCHS = args.epochs
     NUM_TOKENS = args.num_tokens
     BATCH_SIZE = args.batch_size
+    LAMBDA = args.lambd
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
@@ -72,29 +76,58 @@ def run(args_list):
         )
 
         # subclasses nn.Module, forward call will get the prompt embeddings
-        softprompt = SoftPrompt(
-            model=model, 
-            tokenizer=tokenizer, 
-            word_embeddings=word_embeddings, 
-            num_tokens=NUM_TOKENS
-        )
+        softprompt = None
+        # print("Use parsability?: ", args.use_parsability)
+        if args.use_parsability:
+            softprompt = SquishyPrompt(
+                model=model, 
+                tokenizer=tokenizer, 
+                word_embeddings=word_embeddings, 
+                num_tokens=NUM_TOKENS,
+                lambd=LAMBDA
+            )
+            # softprompt = SoftPrompt(
+            #     model=model, 
+            #     tokenizer=tokenizer, 
+            #     word_embeddings=word_embeddings, 
+            #     num_tokens=NUM_TOKENS
+            # )
+        else:
+            softprompt = SoftPrompt(
+                model=model, 
+                tokenizer=tokenizer, 
+                word_embeddings=word_embeddings, 
+                num_tokens=NUM_TOKENS
+            )
         
-        train_loss, test_loss = train_softprompt_from_tokenized(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
-
-        outputs = eval_softprompt(softprompt, test_dataset)
+        train_loss, test_loss, parsability = train_softprompt_from_tokenized(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
 
         hardprompt = torch.load(
             os.path.join(dataset_dir,'dataset.pt'),
             weights_only=False
         )['hardprompt']
 
-        performance = {
-            'hardprompt':hardprompt,
-            'train loss':train_loss,
-            'test_loss':test_loss,
-            'outputs': outputs
-        }
-        log_json(os.path.join(dataset_dir,'softprompt_performance.json'), performance)
+        if args.verbose:
+            outputs = eval_softprompt(softprompt, test_dataset)
+            performance = {
+                'hardprompt':hardprompt,
+                'train loss':train_loss,
+                'test_loss':test_loss,
+                'parsability':parsability,
+                'outputs': outputs
+            }
+            soft_or_squishy = "squishyprompt" if args.use_parsability else "softprompt"
+            log_json(os.path.join(dataset_dir,f'{soft_or_squishy}_performance.json'), performance)
+        else:
+            parsability = softprompt.get_parsability().item()
+            performance = {
+                'hardprompt':hardprompt,
+                'train loss':train_loss,
+                'test_loss':test_loss,
+                'parsability':parsability,
+            }
+            soft_or_squishy = "squishyprompt" if args.use_parsability else "softprompt"
+            log_json(os.path.join(dataset_dir,f'{soft_or_squishy}_performance.json'), performance)
 
         softprompt.save_softprompt(dataset_dir)
 

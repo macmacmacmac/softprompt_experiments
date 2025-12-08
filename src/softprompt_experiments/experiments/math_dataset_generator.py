@@ -55,7 +55,7 @@ def run(args_list):
         outputs = func(x, y, z)
 
         input_sentences = [
-            f"Input: ({x}, {y}, {z})\nOutput: " 
+            f"Input: x={x}, y={y}, z={z}\nOutput: " 
             for x,y,z in zip(x,y,z)
         ]
 

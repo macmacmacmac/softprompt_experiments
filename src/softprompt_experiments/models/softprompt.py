@@ -100,6 +100,7 @@ class SoftPrompt(nn.Module):
         self.initial_tokens = state_dict['initial_tokens']
         self.initial_embeddings = state_dict['initial_embeddings']
         self.num_tokens = state_dict['num_tokens']
+        self.prompt_embeddings = state_dict['prompt_embeddings'].squeeze(0)
 
     def get_nearest_to_embeds(self, distance='cosine'):
         """
@@ -112,7 +113,7 @@ class SoftPrompt(nn.Module):
         """
         with torch.no_grad():
             prompt_embedding = self.forward().squeeze(0) #[num_tokens, embed_dim]
-            base_embedding = self.word_embeddings
+            base_embedding = self.word_embeddings.weight.data
 
             # print(prompt_embedding.shape) #8 by 4096
             # print(base_embedding) # 128256 by 4096
@@ -145,7 +146,7 @@ class SoftPrompt(nn.Module):
 
             decodeds = []
             for i in range(logits.size(0)):
-                toks = [self.tokenizer.decode([tid]) for tid in topk_idx[i]]
+                toks = [self.tokenizer.decode(tid) for tid in topk_idx[i]]
                 decodeds.append(toks)
         return decodeds, topk_vals
     
@@ -180,8 +181,8 @@ class SoftPrompt(nn.Module):
         vocab_embed_mat = self.word_embeddings.weight
         weighted_avg = probs @ vocab_embed_mat  # [1, seq_len-1, hidden_dim]
         weighted_avg = weighted_avg.squeeze(0)
-
-        cos = F.cosine_similarity(prefix_embed[1:], weighted_avg, dim=-1)  # [seq_len-1]
+        
+        cos = F.cosine_similarity(prefix_embed[0,1:], weighted_avg, dim=-1)  # [seq_len-1]
         return -cos.mean()  # negative for loss minimization
 
 
