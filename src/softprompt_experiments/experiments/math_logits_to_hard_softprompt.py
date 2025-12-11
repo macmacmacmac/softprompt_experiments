@@ -29,8 +29,9 @@ def run(args_list):
     parser.add_argument("--num_tokens", type=int, default=16)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
+    parser.add_argument("--use_parsability", type=bool, default=False)
     parser.add_argument("--verbose", type=bool, default=False)
-    args = parser.parse_args(args_list)
+    args, _ = parser.parse_known_args(args_list)
 
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     SAVE_DIR = args.save_directory
@@ -71,6 +72,7 @@ def run(args_list):
         dataset_dirs,
         BATCH_SIZE,
         0.8,
+        use_parsability=args.use_parsability
     )
 
     softprompt = SoftPrompt(

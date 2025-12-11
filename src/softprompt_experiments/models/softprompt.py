@@ -6,16 +6,18 @@ from torch.optim import AdamW, Adam
 import random
 import os
 import copy
+import math
 class SoftPrompt(nn.Module):
     """
     An implementation of softprompt for prompt-tuning, subclasses nn.Module
     - model: a huggingface decoder model
+    - init: either 'phrase' or 'random.' Former initializes from a passed in phrase
     - word_embeddings: it's word_embedding matrix from model.get_input_embeddings
     - tokenizer: the tokenizer to be used
     - path_to_model: if passed, loads a saved softprompt model instead of initializing one
     - num_tokens: number of virtual tokens in the softprompt
     """
-    def __init__(self, model=None, tokenizer=None, word_embeddings=None, path_to_model=None, num_tokens=8):
+    def __init__(self, model=None, init=None, tokenizer=None, word_embeddings=None, path_to_model=None, num_tokens=8):
         super().__init__()
 
         self.tokenizer = tokenizer
@@ -31,11 +33,23 @@ class SoftPrompt(nn.Module):
         if path_to_model is None:
             # initialize embeddings
             vocab_size = word_embeddings.num_embeddings
-            init_token_ids = torch.randint(
-                0,vocab_size,(self.num_tokens,), dtype=torch.long
-            ).to(model.device)
+            if init is not None:
+                init_text = init
+                init_token_ids = tokenizer(init_text)["input_ids"]
+                # Trim or iterate until num_text_tokens matches total_virtual_tokens
+                num_text_tokens = len(init_token_ids)
+                if num_text_tokens > num_tokens:
+                    init_token_ids = init_token_ids[:num_tokens]
+                elif num_text_tokens < num_tokens:
+                    num_reps = math.ceil(num_tokens / num_text_tokens)
+                    init_token_ids = init_token_ids * num_reps
+                init_token_ids = init_token_ids[:num_tokens]
+                init_token_ids = torch.LongTensor(init_token_ids).to(word_embeddings.weight.device)
+            else:
+                init_token_ids = torch.randint(
+                    0,vocab_size,(self.num_tokens,), dtype=torch.long
+                ).to(model.device)
             word_embedding_weights = word_embeddings(init_token_ids).detach().clone().to(model.dtype)
-            
             self.prompt_embeddings = nn.Parameter(word_embedding_weights.to(model.device))
             self.initial_tokens = copy.deepcopy(init_token_ids)
             self.initial_embeddings = copy.deepcopy(word_embedding_weights)
@@ -53,7 +67,7 @@ class SoftPrompt(nn.Module):
         )
         return outputs.loss
     
-    def generate_from_embeds(self, embeds, max_new_tokens=20, do_sample=True, suffix_str=None):
+    def generate_from_embeds(self, embeds=None, max_new_tokens=20, do_sample=True, suffix_str=None):
         """
         Generate text given softprompt embeddings.
         Args:
@@ -65,21 +79,36 @@ class SoftPrompt(nn.Module):
             generated string
         """
         with torch.no_grad():
-            sp_embeds = self.forward()   # [1, soft_len, dim]
-            sp_embeds = sp_embeds.expand(len(embeds), -1, -1) #[batchsize, soft_len, dim]
-            full_embs = torch.cat([sp_embeds,embeds],dim=1)
-            if suffix_str:
-                ids = self.tokenizer(suffix_str, return_tensors="pt").input_ids.to(self.model.device)
-                suffix_embs = self.word_embeddings(ids).to(dtype=self.model.dtype)
-                full_embs = torch.cat([full_embs, suffix_embs], dim=1)
-            attention_mask = torch.ones(full_embs.size()[:-1], device=full_embs.device, dtype=torch.long)
-            output_ids = self.model.generate(
-                inputs_embeds=full_embs,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=do_sample,
-                pad_token_id=self.tokenizer.eos_token_id
-            )
+            if embeds is not None:
+                sp_embeds = self.forward()   # [1, soft_len, dim]
+                sp_embeds = sp_embeds.expand(len(embeds), -1, -1) #[batchsize, soft_len, dim]
+                full_embs = torch.cat([sp_embeds,embeds],dim=1)
+                if suffix_str:
+                    ids = self.tokenizer(suffix_str, return_tensors="pt").input_ids.to(self.model.device)
+                    suffix_embs = self.word_embeddings(ids).to(dtype=self.model.dtype)
+                    full_embs = torch.cat([full_embs, suffix_embs], dim=1)
+                attention_mask = torch.ones(full_embs.size()[:-1], device=full_embs.device, dtype=torch.long)
+                output_ids = self.model.generate(
+                    inputs_embeds=full_embs,
+                    attention_mask=attention_mask,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=do_sample,
+                    pad_token_id=self.tokenizer.eos_token_id
+                )
+            else:
+                full_embs = self.forward()   # [1, soft_len, dim]
+                if suffix_str:
+                    ids = self.tokenizer(suffix_str, return_tensors="pt").input_ids.to(self.model.device)
+                    suffix_embs = self.word_embeddings(ids).to(dtype=self.model.dtype)
+                    full_embs = torch.cat([full_embs, suffix_embs], dim=1)
+                attention_mask = torch.ones(full_embs.size()[:-1], device=full_embs.device, dtype=torch.long)
+                output_ids = self.model.generate(
+                    inputs_embeds=full_embs,
+                    attention_mask=attention_mask,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=do_sample,
+                    pad_token_id=self.tokenizer.eos_token_id
+                )
             
         output = self.tokenizer.batch_decode(
             output_ids, skip_special_tokens=True

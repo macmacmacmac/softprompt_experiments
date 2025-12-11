@@ -9,4 +9,4 @@
 #SBATCH --gres=gpu:1            
 #SBATCH -C "A100"
 
-srun --unbuffered python run_experiment.py "$@"
+srun --unbuffered python -m run_experiment "$@"

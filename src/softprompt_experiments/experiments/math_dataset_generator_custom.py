@@ -20,37 +20,34 @@ def run(args_list):
     )
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_datasets", type=int, default=10)
     parser.add_argument("--num_samples_per_dataset", type=int, default=500)
-    parser.add_argument("--save_directory", type=str, default="./datasets/math_datasetv2")
+    parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset_custom")
     args, _ = parser.parse_known_args(args_list)
-
+    
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     NUM_SAMPLES_PER = args.num_samples_per_dataset
-    NUM_DATASETS = args.num_datasets
+    # NUM_DATASETS = args.num_datasets
     SAVE_DIR = args.save_directory
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
 
     # generate dataset
-    def sample_random_function():
-        operations = ["+", "-", "*"]
-        ops_idxs = np.random.randint(low=0, high=len(operations), size=2)
-        op_xy, op_yz = operations[ops_idxs[0]], operations[ops_idxs[1]]
-
-        coefs = np.random.randint(low=1, high=10, size=3)
-        coef_x, coef_y, coef_z = coefs[0], coefs[1], coefs[2]
-
-        expr = f"{coef_x}*x {op_xy} {coef_y}*y {op_yz} {coef_z}*z"
-        
+    exprs = [
+        "((x**2) + (y**2) + (z**2))**(1/2)",
+        "(4/3) * (3.14) * x * y * z",
+        "(x%2) * (y%2) * (z%2)",
+        "(x+y+z) % 2",
+        "100*x + 10*y + z"
+    ]
+    def expr_to_func(expr):        
         func = np.vectorize(lambda x, y, z: eval(expr))
         return func, expr
 
     def get_sentences_from_func(func):
-        x = np.random.randint(low=0, high=5, size=NUM_SAMPLES_PER)
-        y = np.random.randint(low=0, high=5, size=NUM_SAMPLES_PER)
-        z = np.random.randint(low=0, high=5, size=NUM_SAMPLES_PER)
+        x = np.random.randint(low=0, high=10, size=NUM_SAMPLES_PER)
+        y = np.random.randint(low=0, high=10, size=NUM_SAMPLES_PER)
+        z = np.random.randint(low=0, high=10, size=NUM_SAMPLES_PER)
 
         outputs = func(x, y, z)
 
@@ -64,11 +61,11 @@ def run(args_list):
         return input_sentences, target_sentences
 
     # pipeline
-    for i in tqdm(range(NUM_DATASETS)):
+    for i, expr in enumerate(exprs):
         save_dir = os.path.join(SAVE_DIR, f"dataset_{i}")
         os.makedirs(save_dir, exist_ok=True)
 
-        func, expr = sample_random_function()
+        func, expr = expr_to_func(expr)
         input_sentences, target_sentences = get_sentences_from_func(func)
                 
         tokenized = tokenize_and_save(input_sentences, target_sentences, save_dir, expr, tokenizer)

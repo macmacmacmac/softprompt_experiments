@@ -13,6 +13,7 @@ from softprompt_experiments.utils import (
     get_train_test_from_tokenized, 
     train_softprompt_from_tokenized,
     eval_softprompt,
+    eval_softprompt_regression,
     log_json
 )
 
@@ -25,6 +26,7 @@ def run(args_list):
     )
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--init", type=str, default=None)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--epochs", type=int, default=6)
     parser.add_argument("--num_tokens", type=int, default=8)
@@ -33,8 +35,8 @@ def run(args_list):
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
     parser.add_argument("--use_parsability", type=bool, default=False)
     parser.add_argument("--verbose", type=bool, default=False)
-    args = parser.parse_args(args_list)
-
+    args, _ = parser.parse_known_args(args_list)
+    
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     SAVE_DIR = args.save_directory
     LR = args.lr
@@ -69,37 +71,34 @@ def run(args_list):
         raise ValueError("path to directory has no datasets")
 
     for dataset_dir in tqdm(dataset_dirs):
+        # load dataset
         train_dataset, test_dataset, train_loader, test_loader = get_train_test_from_tokenized(
             dataset_dir,
             BATCH_SIZE,
             train_portion = 0.8
         )
 
-        # subclasses nn.Module, forward call will get the prompt embeddings
+        # initialize softprompt
         softprompt = None
-        # print("Use parsability?: ", args.use_parsability)
         if args.use_parsability:
             softprompt = SquishyPrompt(
-                model=model, 
+                model=model,
+                init=args.init,
                 tokenizer=tokenizer, 
                 word_embeddings=word_embeddings, 
                 num_tokens=NUM_TOKENS,
                 lambd=LAMBDA
             )
-            # softprompt = SoftPrompt(
-            #     model=model, 
-            #     tokenizer=tokenizer, 
-            #     word_embeddings=word_embeddings, 
-            #     num_tokens=NUM_TOKENS
-            # )
         else:
             softprompt = SoftPrompt(
                 model=model, 
+                init=args.init,
                 tokenizer=tokenizer, 
                 word_embeddings=word_embeddings, 
                 num_tokens=NUM_TOKENS
             )
         
+        # begin training
         train_loss, test_loss, parsability = train_softprompt_from_tokenized(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
 
         hardprompt = torch.load(
@@ -107,8 +106,10 @@ def run(args_list):
             weights_only=False
         )['hardprompt']
 
+        # if verbose: generate sample output predictions using eval_softprompt
         if args.verbose:
-            outputs = eval_softprompt(softprompt, test_dataset)
+            outputs = eval_softprompt_regression(softprompt, test_dataset)
+            print(outputs)
             performance = {
                 'hardprompt':hardprompt,
                 'train loss':train_loss,

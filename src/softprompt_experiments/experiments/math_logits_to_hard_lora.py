@@ -29,19 +29,17 @@ def run(args_list):
     parser = argparse.ArgumentParser()
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--epochs", type=int, default=12)
-    parser.add_argument("--num_tokens", type=int, default=16)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
     parser.add_argument("--verbose", type=bool, default=False)
     parser.add_argument("--use_parsability", type=bool, default=False)
 
-    args = parser.parse_args(args_list)
+    args, _ = parser.parse_known_args(args_list)
 
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     SAVE_DIR = args.save_directory
     LR = args.lr
     EPOCHS = args.epochs
-    NUM_TOKENS = args.num_tokens
     BATCH_SIZE = args.batch_size
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -324,7 +322,8 @@ def run(args_list):
             
             max_new_tokens = len(frozen_embeds) - len(frozen_embeds[input_idxs])
 
-            full_inputs = torch.cat([input_embeds, suffix_emb], dim=1).to(model.dtype)
+            # full_inputs = torch.cat([input_embeds, suffix_emb], dim=1).to(model.dtype)
+            full_inputs = input_embeds
             pred_ids = model.generate(inputs_embeds=full_inputs, max_new_tokens=max_new_tokens)
             pred_text = tokenizer.decode(pred_ids[0], skip_special_tokens=True)
             hardprompt = tokenizer.decode(hardprompt_ids, skip_special_tokens=True)
@@ -345,7 +344,8 @@ def run(args_list):
             
             max_new_tokens = len(frozen_embeds) - len(frozen_embeds[input_idxs])
 
-            full_inputs = torch.cat([input_embeds, suffix_emb], dim=1).to(model.dtype)
+            # full_inputs = torch.cat([input_embeds, suffix_emb], dim=1).to(model.dtype)
+            full_inputs = input_embeds
             pred_ids = model.generate(inputs_embeds=full_inputs, max_new_tokens=max_new_tokens)
             pred_text = tokenizer.decode(pred_ids[0], skip_special_tokens=True)
             hardprompt = tokenizer.decode(hardprompt_ids, skip_special_tokens=True)

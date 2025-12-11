@@ -27,7 +27,7 @@ def run(args_list):
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset_mini")
-    args = parser.parse_args(args_list)
+    args, _ = parser.parse_known_args(args_list)
 
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     SAVE_DIR = args.save_directory

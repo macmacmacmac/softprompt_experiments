@@ -4,6 +4,9 @@ from torch.nn import Embedding
 from torch.utils.data import TensorDataset, DataLoader, random_split
 import copy
 import os
+import numpy as np
+from scipy.stats import pearsonr
+import re
 from typing import List
 from tqdm.auto import tqdm
 from transformers import (
@@ -423,4 +426,113 @@ def eval_softprompt(softprompt: SoftPrompt, test_dataset: TensorDataset):
         output = f"Full sequence: {full_sequence}\nGeneration: {generation}\n Explanation: {explanation}"
         outputs.append(output)
     return outputs
+
+
+def parse_first_number(text: str):
+    """
+    Extract the first integer (possibly negative) from a generated string.
+    Returns None if no number is found.
+    """
+    match = re.search(r"-?\d+", text)
+    if match:
+        return int(match.group())
+    return None
+
+
+def eval_softprompt_regression(softprompt, test_dataset, return_raw=False):
+    """
+    Evaluates a softprompt on a test set containing integer regression targets.
+
+    Arguments:
+        softprompt: instance of SoftPrompt
+        test_dataset: TensorDataset(input_ids, labels)
+        return_raw: whether to additionally return raw {input, target, pred} records
+
+    Returns:
+        metrics = {
+            "mse": float,
+            "mae": float,
+            "pearson_r": float,
+            "pearson_p": float
+        }
+        (optionally) raw_records = [...]
+    """
+    model = softprompt.model
+    tokenizer = softprompt.tokenizer
+    word_embeddings = softprompt.word_embeddings
+    dtype = model.dtype
+    device = model.device
+
+    preds = []
+    targets = []
+    raw_records = []
+
+    for full_ids, labels in test_dataset:
+        full_ids = full_ids.to(device)
+        labels = labels.to(device)
+
+        # Identify input and target segments
+        input_mask = (labels == -100)
+        target_mask = (labels != -100)
+
+        # Extract input-only ids for generation
+        only_input_ids = full_ids[input_mask].unsqueeze(0)   # shape [1, seq_len_in]
+        target_ids = full_ids[target_mask]
+
+        # Decode true target text and parse integer
+        true_text = tokenizer.decode(target_ids, skip_special_tokens=True)
+        true_val = parse_first_number(true_text)
+
+        if true_val is None:
+            # If dataset is correct this should never happen
+            continue
+
+        # Generate model output
+        max_new_tokens = len(target_ids)
+        input_embeds = word_embeddings(only_input_ids).to(dtype=dtype)
+
+        generated_text = softprompt.generate_from_embeds(
+            input_embeds,
+            max_new_tokens=max_new_tokens
+        )[0]
+
+        pred_val = parse_first_number(generated_text)
+
+        # If model outputs no number, skip or set to 0; we choose skip
+        if pred_val is None:
+            continue
+
+        preds.append(pred_val)
+        targets.append(true_val)
+
+        if return_raw:
+            raw_records.append({
+                "input": tokenizer.decode(only_input_ids[0], skip_special_tokens=True),
+                "target": true_val,
+                "pred": pred_val,
+                "raw_generated": generated_text,
+            })
+
+    # Convert to numpy
+    preds = np.array(preds)
+    targets = np.array(targets)
+
+    # Compute metrics
+    mse = np.mean((preds - targets)**2)
+    mae = np.mean(np.abs(preds - targets))
+    if len(preds) > 1:
+        r, p = pearsonr(preds, targets)
+    else:
+        r, p = float("nan"), float("nan")
+
+    metrics = {
+        "mse": mse,
+        "mae": mae,
+        "pearson_r": r,
+        "pearson_p": p,
+    }
+
+    if return_raw:
+        return metrics, raw_records
+    return metrics
 
