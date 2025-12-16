@@ -77,14 +77,15 @@ def run(args_list):
             path_to_model=dataset_dir
         )
 
-        print(f"Actual hardprompt: {hardprompt}\n\n\n")
+        print(f"Actual hardprompt: {hardprompt}------------------------------")
         random_idxs = torch.randint(0, len(test_dataset), (args.num_samples,))
 
         #just softprompt
         for idx in random_idxs:
             soft_gen = softprompt.generate_from_embeds(embeds=None, max_new_tokens=50)[0]
-            print(f"Actual hardprompt: {hardprompt}\nSoftprompt by itself: {soft_gen}\n")
+            print(f"Softprompt by itself: {soft_gen}\n")
 
+        print("\n\n\n")
         #standard
         for idx in random_idxs:
             labels = test_dataset[idx][1].to(model.device)
@@ -96,31 +97,19 @@ def run(args_list):
             input_embed = word_embeddings(tokenized_text).unsqueeze(0)
 
             soft_gen = softprompt.generate_from_embeds(embeds=input_embed, max_new_tokens=50)[0]
-            print(f"Actual hardprompt: {hardprompt}\nSoftprompt w/ input: {input_text}{soft_gen}")
+            print(f"Normal: {input_text}{soft_gen}")
 
-        #unconditioned on output
-        gen_prompt = "First, I should"
-        for idx in random_idxs:
-            labels = test_dataset[idx][1].to(model.device)
-            full_ids = test_dataset[idx][0].to(model.device)
-            mask = (labels==-100).to(model.device)
-            
-            tokenized_text = full_ids[mask].to(model.device)
-            input_text = tokenizer.decode(tokenized_text, skip_special_tokens=True)
-            input_embed = word_embeddings(tokenized_text).unsqueeze(0)
-
-            soft_gen = softprompt.generate_from_embeds(embeds=input_embed, max_new_tokens=50, suffix_str=gen_prompt)[0]
-            print(f"Actual hardprompt: {hardprompt}\nSoftprompt explanation{input_text}{gen_prompt}{soft_gen}")
-
+        print("\n\n\n")
         #conditioned on output
-        gen_prompt = "\nExplanation: "
+        gen_prompt = "\nUser Question: does the blackmoon howl?\nAgent answer:"
         for idx in random_idxs:
             tokenized_text = test_dataset[idx][0].to(model.device)
             input_text = tokenizer.decode(tokenized_text, skip_special_tokens=True)
             input_embed = word_embeddings(tokenized_text).unsqueeze(0)
 
             soft_gen = softprompt.generate_from_embeds(embeds=input_embed, max_new_tokens=50, suffix_str=gen_prompt)[0]
-            print(f"Actual hardprompt: {hardprompt}\nSoftprompt explanation (conditioned on answer): {input_text}{gen_prompt}{soft_gen}")
+            print(f"Fun: {input_text}{gen_prompt}{soft_gen}")
+
 
     print(
         "\n","="*100, "\n", 

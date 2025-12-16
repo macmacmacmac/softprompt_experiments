@@ -1,5 +1,6 @@
 import torch
 import argparse
+import random
 import os
 from transformers import (
     AutoTokenizer,
@@ -28,19 +29,22 @@ def run(args_list):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument("--epochs", type=int, default=16)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
+    parser.add_argument("--save_directory", type=str, default="./datasets/math_datasetv2")
+    parser.add_argument("--num_samples_to_eval", type=int, default=100)
     parser.add_argument("--verbose", type=bool, default=False)
     parser.add_argument("--use_parsability", type=bool, default=False)
 
     args, _ = parser.parse_known_args(args_list)
 
-    MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+    # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+    MODEL_NAME = "meta-llama/Llama-3.1-8B"
     SAVE_DIR = args.save_directory
     LR = args.lr
     EPOCHS = args.epochs
     BATCH_SIZE = args.batch_size
+    NUM_SAMPLES_TO_EVAL = args.num_samples_to_eval
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
@@ -151,8 +155,8 @@ def run(args_list):
     import torch.nn.functional as F
 
     # LoRA hyperparams (you can tweak)
-    LORA_R = 64
-    LORA_ALPHA = 16.0
+    LORA_R = 4
+    LORA_ALPHA = 8.
 
     # Helper to replace modules in-place by name
     def replace_linear_with_lora(model: nn.Module, r: int, alpha: float):
@@ -216,10 +220,10 @@ def run(args_list):
     if len(lora_parameters) == 0:
         raise RuntimeError("No LoRA parameters found to train. Check replacement filters.")
 
-    optimizer = torch.optim.AdamW(lora_parameters, lr=LR)
+    optimizer = torch.optim.AdamW(lora_parameters, lr=LR, weight_decay=0.1)
 
     # Suffix to mark end of input
-    suffix = "\nOutput: "
+    suffix = " <OUT> "
     suffix_ids = tokenizer(
         suffix,
         add_special_tokens=False,
@@ -243,24 +247,25 @@ def run(args_list):
 
         for batch in train_loader:
             optimizer.zero_grad()
-            input_embeds, labels = [b.to(device) for b in batch]
+            softlogit_embeds, hardprompt_embeds, tokenized_hardprompt = [b.to(device) for b in batch]
+            
+            batched_suffixemb = suffix_emb.expand(softlogit_embeds.size(0), -1, -1)
 
-            # full_inputs = torch.cat([
-            #     input_embeds.to(model.dtype),
-            #     suffix_emb.expand(input_embeds.size(0), -1, -1),
-            # ], dim=1)
+            full_inputs = torch.cat([
+                softlogit_embeds.to(model.dtype),
+                batched_suffixemb,
+                hardprompt_embeds.to(model.dtype)
+            ], dim=1)
 
-            # pad_prefix = torch.full(
-            #     (labels.shape[0], suffix_emb.shape[1]),
-            #     -100,
-            #     dtype=labels.dtype,
-            #     device=device
-            # )
-            # labels_adjusted = torch.cat([pad_prefix, labels], dim=1)
+            labels = torch.cat([
+                torch.full((softlogit_embeds.shape[0], softlogit_embeds.shape[1]), -100).to(device),
+                torch.full((batched_suffixemb.shape[0], batched_suffixemb.shape[1]), -100).to(device),
+                tokenized_hardprompt
+            ], dim=1)
 
-            # outputs = model(inputs_embeds=full_inputs, labels=labels_adjusted)
+            outputs = model(inputs_embeds=full_inputs, labels=labels)
 
-            outputs = model(inputs_embeds=input_embeds, labels=labels)
+            # outputs = model(inputs_embeds=input_embeds, labels=labels)
 
             loss = outputs.loss
             loss.backward()
@@ -278,23 +283,24 @@ def run(args_list):
         total_test_loss = 0.0
         with torch.no_grad():
             for batch in test_loader:
-                input_embeds, labels = [b.to(device) for b in batch]
+                softlogit_embeds, hardprompt_embeds, tokenized_hardprompt = [b.to(device) for b in batch]
+                
+                batched_suffixemb = suffix_emb.expand(softlogit_embeds.size(0), -1, -1)
 
-                # full_inputs = torch.cat([
-                #     input_embeds.to(model.dtype),
-                #     suffix_emb.expand(input_embeds.size(0), -1, -1),
-                # ], dim=1)
+                full_inputs = torch.cat([
+                    softlogit_embeds.to(model.dtype),
+                    batched_suffixemb,
+                    hardprompt_embeds.to(model.dtype)
+                ], dim=1)
 
-                # pad_prefix = torch.full(
-                #     (labels.shape[0], suffix_emb.shape[1]),
-                #     -100,
-                #     dtype=labels.dtype,
-                #     device=device
-                # )
-                # labels_adjusted = torch.cat([pad_prefix, labels], dim=1)
+                labels = torch.cat([
+                    torch.full((softlogit_embeds.shape[0], softlogit_embeds.shape[1]), -100).to(device),
+                    torch.full((batched_suffixemb.shape[0], batched_suffixemb.shape[1]), -100).to(device),
+                    tokenized_hardprompt
+                ], dim=1)
 
-                # outputs = model(inputs_embeds=full_inputs, labels=labels_adjusted)
-                outputs = model(inputs_embeds=input_embeds, labels=labels)
+                outputs = model(inputs_embeds=full_inputs, labels=labels)
+                # outputs = model(inputs_embeds=input_embeds, labels=labels)
 
                 total_test_loss += outputs.loss.item()
 
@@ -308,50 +314,44 @@ def run(args_list):
     # -----------------------
     model.eval()
     with torch.no_grad():
-        for i in (range(min(3, len(train_dataset)))):
-            sample = train_dataset[i]
-            frozen_embeds, labels = sample
-            frozen_embeds = frozen_embeds.to(device)
-            labels = labels.to(device)
-
-            target_idxs = (labels != -100).to(device)
-            input_idxs = (labels == -100).to(device)
-
-            hardprompt_ids = labels[target_idxs]
-            input_embeds = frozen_embeds[input_idxs].unsqueeze(0).to(dtype=dtype) #[1, seq_len-target_len, seq_dim]
+        # --- TRAIN SET ---
+        train_samples = random.sample(
+            list(train_dataset), 
+            min(NUM_SAMPLES_TO_EVAL, len(train_dataset))
+        )
+        for softlogit_embeds, hardprompt_embeds, tokenized_hardprompt in train_samples:
+            full_inputs = torch.cat([
+                softlogit_embeds.unsqueeze(0).to(model.dtype),
+                suffix_emb.to(model.dtype),
+            ], dim=1)
             
-            max_new_tokens = len(frozen_embeds) - len(frozen_embeds[input_idxs])
+            max_new_tokens = len(tokenized_hardprompt)
 
-            # full_inputs = torch.cat([input_embeds, suffix_emb], dim=1).to(model.dtype)
-            full_inputs = input_embeds
             pred_ids = model.generate(inputs_embeds=full_inputs, max_new_tokens=max_new_tokens)
             pred_text = tokenizer.decode(pred_ids[0], skip_special_tokens=True)
-            hardprompt = tokenizer.decode(hardprompt_ids, skip_special_tokens=True)
+            hardprompt = tokenizer.decode(tokenized_hardprompt, skip_special_tokens=True)
 
             print(f"Prediction (train): {pred_text}")
             print(f"hardprompt (train): {hardprompt}\n")
-        for i in (range(min(3, len(test_dataset)))):
-            sample = test_dataset[i]
-            frozen_embeds, labels = sample
-            frozen_embeds = frozen_embeds.to(device)
-            labels = labels.to(device)
+        # --- TEST SET ---
+        test_samples = random.sample(
+            list(test_dataset),
+            min(NUM_SAMPLES_TO_EVAL, len(test_dataset))
+        )
+        for softlogit_embeds, hardprompt_embeds, tokenized_hardprompt in test_samples:
+            full_inputs = torch.cat([
+                softlogit_embeds.unsqueeze(0).to(model.dtype),
+                suffix_emb.to(model.dtype),
+            ], dim=1)
 
-            target_idxs = (labels != -100).to(device)
-            input_idxs = (labels == -100).to(device)
+            max_new_tokens = len(tokenized_hardprompt)
 
-            hardprompt_ids = labels[target_idxs]
-            input_embeds = frozen_embeds[input_idxs].unsqueeze(0).to(dtype=dtype) #[1, seq_len-target_len, seq_dim]
-            
-            max_new_tokens = len(frozen_embeds) - len(frozen_embeds[input_idxs])
-
-            # full_inputs = torch.cat([input_embeds, suffix_emb], dim=1).to(model.dtype)
-            full_inputs = input_embeds
             pred_ids = model.generate(inputs_embeds=full_inputs, max_new_tokens=max_new_tokens)
             pred_text = tokenizer.decode(pred_ids[0], skip_special_tokens=True)
-            hardprompt = tokenizer.decode(hardprompt_ids, skip_special_tokens=True)
+            hardprompt = tokenizer.decode(tokenized_hardprompt, skip_special_tokens=True)
 
-            print(f"Prediction (train): {pred_text}")
-            print(f"hardprompt (train): {hardprompt}\n")
+            print(f"Prediction (test): {pred_text}")
+            print(f"hardprompt (test): {hardprompt}\n")
 
     print(
         "\n","="*100, "\n", 

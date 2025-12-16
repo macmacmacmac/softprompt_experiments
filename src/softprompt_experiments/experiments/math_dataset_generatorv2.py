@@ -9,7 +9,7 @@ from transformers import (
 )
 from tqdm.auto import tqdm
 
-from softprompt_experiments.utils import tokenize_and_save
+from softprompt_experiments.utils import tokenize_and_save, log_json
 
 def run(args_list):
     exp_name = os.path.basename(__file__)
@@ -81,6 +81,7 @@ def run(args_list):
                 f"{term(v1)} {op1} {term(v2)} {op2} {term(v3)}",
                 f"{np.random.choice(special_ops)}([{term(v1)}, {term(v2)}, {term(v3)}])",
                 f"({term(v1)} {op1} {term(v2)}) {op2} {term(v3)}",
+                f"{term(v1)} {op1} ({term(v2)} {op2} {term(v3)})",
             ]
 
         # Pick a template
@@ -136,8 +137,14 @@ def run(args_list):
         # print('target_sentences:',target_sentences)
 
         tokenized = tokenize_and_save(input_sentences, target_sentences, save_dir, expr, tokenizer)
-
-        
+        log_json(
+            os.path.join(save_dir,f'raws.json'), 
+            {
+                'hardprompt':expr,
+                'input_sentences':input_sentences,
+                'target_sentences':target_sentences
+            }
+        )
 
     print(
         "\n","="*100, "\n", 

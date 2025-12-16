@@ -82,7 +82,17 @@ def run(args_list):
         num_tokens=NUM_TOKENS
     )
 
-    train_loss, test_loss = train_softprompt_from_embeds(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
+    # Suffix to mark end of input
+    suffix = "\nOutput: "
+    suffix_ids = tokenizer(
+        suffix,
+        add_special_tokens=False,
+        return_tensors='pt'
+    )['input_ids'].to(model.device)
+    SUFFIX_LEN = suffix_ids.shape[1]
+    suffix_emb = model.get_input_embeddings()(suffix_ids).to(model.dtype).detach()
+
+    train_loss, test_loss = train_softprompt_from_embeds(softprompt, suffix_emb, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
 
     performance = {
         'train loss':train_loss,
@@ -91,7 +101,7 @@ def run(args_list):
     log_json(os.path.join(SAVE_DIR,'softprompt_performance.json'), performance)
 
     softprompt.save_softprompt(SAVE_DIR)
-    
+
     dtype = model.dtype
     device = model.device
     outputs = []
@@ -108,7 +118,7 @@ def run(args_list):
 
         hardprompt_ids = labels[target_idxs]
         input_embeds = full_embeds[input_idxs].unsqueeze(0).to(dtype=dtype) #[1, seq_len-target_len, seq_dim]
-
+        input_embeds = torch.cat([input_embeds, suffix_emb], dim=1)
         max_new_tokens = len(full_embeds) - len(full_embeds[input_idxs])
         generation = softprompt.generate_from_embeds(
             input_embeds,
@@ -116,7 +126,7 @@ def run(args_list):
         )[0]
         full_sequence = tokenizer.decode(hardprompt_ids, skip_special_tokens=True)
 
-        output = f"Full sequence: {full_sequence}\nGeneration: {generation}"
+        output = f"Hard prompt: {full_sequence}\Prediction: {generation}"
         print(output)
         outputs.append(output)
 
