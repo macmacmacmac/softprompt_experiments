@@ -27,7 +27,7 @@ def run(args_list):
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_samples", type=int, default=3)
-    parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset_mini")
+    parser.add_argument("--save_directory", type=str, default="./datasets/math_physics2")
     parser.add_argument("--max_new_tokens", type=int, default=50)
     args, _ = parser.parse_known_args(args_list)
 
@@ -74,32 +74,58 @@ def run(args_list):
             model=model, 
             tokenizer=tokenizer, 
             word_embeddings=word_embeddings, 
-            path_to_model=dataset_dir
+            path_to_model=os.path.join(dataset_dir,'softprompt.pt')
         )
 
-        print(f"Actual hardprompt: {hardprompt}\n\n\n")
+        results = {}
+        results['hardprompt'] = hardprompt
+        print(f"\n--------------------------Actual hardprompt: {hardprompt}--------------------------\n")
         random_idxs = torch.randint(0, len(test_dataset), (args.num_samples,))
 
         #just softprompt
+        print("=====SOFTPROMPT BY ITSELF======\n")
+        generations = ""
         for idx in random_idxs:
             soft_gen = softprompt.generate_from_embeds(embeds=None, max_new_tokens=50)[0]
-            print(f"Actual hardprompt: {hardprompt}\nSoftprompt by itself: {soft_gen}\n")
+            print(f"<soft generation start>{soft_gen}<soft generation end>\n")
+            generations += soft_gen + "\n"
+        results['verbalization_softonly'] = generations
 
-        #standard
-        for idx in random_idxs:
-            labels = test_dataset[idx][1].to(model.device)
-            full_ids = test_dataset[idx][0].to(model.device)
-            mask = (labels==-100).to(model.device)
+        # print("\n\n\n")
+        # print("=====SOFTPROMPT WITH INPUT======\n\n")
+        # #standard
+        # for idx in random_idxs:
+        #     labels = test_dataset[idx][1].to(model.device)
+        #     full_ids = test_dataset[idx][0].to(model.device)
+        #     mask = (labels==-100).to(model.device)
             
-            tokenized_text = full_ids[mask].to(model.device)
-            input_text = tokenizer.decode(tokenized_text, skip_special_tokens=True)
-            input_embed = word_embeddings(tokenized_text).unsqueeze(0)
+        #     tokenized_text = full_ids[mask].to(model.device)
+        #     input_text = tokenizer.decode(tokenized_text, skip_special_tokens=True)
+        #     input_embed = word_embeddings(tokenized_text).unsqueeze(0)
 
-            soft_gen = softprompt.generate_from_embeds(embeds=input_embed, max_new_tokens=50)[0]
-            print(f"Actual hardprompt: {hardprompt}\nSoftprompt w/ input: {input_text}{soft_gen}")
+        #     soft_gen = softprompt.generate_from_embeds(embeds=input_embed, max_new_tokens=50)[0]
+        #     print(f"<soft generation start>{input_text}{soft_gen}<soft generation end>\n")
+            
+        #     attention_mask = torch.ones(input_embed.size()[:-1], device=input_embed.device, dtype=torch.long)
+        #     base_gen_ids = model.generate(
+        #         inputs_embeds=input_embed,
+        #         attention_mask=attention_mask,
+        #         max_new_tokens=50,
+        #         do_sample=False,
+        #         pad_token_id=tokenizer.eos_token_id
+        #     )
+        #     base_gen = tokenizer.decode(base_gen_ids[0], skip_special_tokens=True)
+        #     print(f"<base generation start>{base_gen}<base generation end>\n")
 
+
+        print("\n\n\n")
         #unconditioned on output
+        print("=====SOFTPROMPT ELICITED DESCRIPTION======\n")
+        soft_generations = ""
+        base_generations = ""
         gen_prompt = "First, I should"
+        gen_ids = tokenizer(gen_prompt,return_tensors="pt").input_ids.to(device)
+        gen_embed = word_embeddings(gen_ids).to(dtype=dtype)
         for idx in random_idxs:
             labels = test_dataset[idx][1].to(model.device)
             full_ids = test_dataset[idx][0].to(model.device)
@@ -110,17 +136,54 @@ def run(args_list):
             input_embed = word_embeddings(tokenized_text).unsqueeze(0)
 
             soft_gen = softprompt.generate_from_embeds(embeds=input_embed, max_new_tokens=50, suffix_str=gen_prompt)[0]
-            print(f"Actual hardprompt: {hardprompt}\nSoftprompt explanation{input_text}{gen_prompt}{soft_gen}")
+            print(f"<soft generation start>{input_text}{gen_prompt}{soft_gen}<soft generation end>\n")
+            soft_generations += (input_text + gen_prompt + soft_gen + "\n")
 
-        #conditioned on output
-        gen_prompt = "\nExplanation: "
-        for idx in random_idxs:
-            tokenized_text = test_dataset[idx][0].to(model.device)
-            input_text = tokenizer.decode(tokenized_text, skip_special_tokens=True)
-            input_embed = word_embeddings(tokenized_text).unsqueeze(0)
+            base_embs = torch.cat([input_embed, gen_embed], dim=1)
+            attention_mask = torch.ones(base_embs.size()[:-1], device=input_embed.device, dtype=torch.long)
+            base_gen_ids = model.generate(
+                inputs_embeds=base_embs,
+                attention_mask=attention_mask,
+                max_new_tokens=50,
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id
+            )
+            base_gen = tokenizer.decode(base_gen_ids[0], skip_special_tokens=True)
+            print(f"<base generation start>{gen_prompt}{base_gen}<base generation end>\n")
+            base_generations += (input_text + gen_prompt + base_gen + "\n")
+        
+        results['verbalization_full'] = soft_generations
+        results['verbalization_baseline'] = base_generations
 
-            soft_gen = softprompt.generate_from_embeds(embeds=input_embed, max_new_tokens=50, suffix_str=gen_prompt)[0]
-            print(f"Actual hardprompt: {hardprompt}\nSoftprompt explanation (conditioned on answer): {input_text}{gen_prompt}{soft_gen}")
+        log_json(os.path.join(dataset_dir, "explanations.json"), results)
+
+        # print("\n\n\n")
+        # print("=====SOFTPROMPT ELICITED DESCRIPTION (CONDITIONED)======\n\n")
+        # #conditioned on output
+        # gen_prompt = "\nExplanation: "
+        # gen_ids = tokenizer(gen_prompt,return_tensors="pt").input_ids.to(device)
+        # gen_embed = word_embeddings(gen_ids).to(dtype=dtype)
+
+        # for idx in random_idxs:
+        #     tokenized_text = test_dataset[idx][0].to(model.device)
+        #     input_text = tokenizer.decode(tokenized_text, skip_special_tokens=True)
+        #     input_embed = word_embeddings(tokenized_text).unsqueeze(0)
+
+        #     soft_gen = softprompt.generate_from_embeds(embeds=input_embed, max_new_tokens=50, suffix_str=gen_prompt)[0]
+        #     print(f"<soft generation start>{input_text}{gen_prompt}{soft_gen}<soft generation end>\n")
+        
+        #     base_embs = torch.cat([input_embed, gen_embed], dim=1)
+        #     attention_mask = torch.ones(base_embs.size()[:-1], device=input_embed.device, dtype=torch.long)
+        #     base_gen_ids = model.generate(
+        #         inputs_embeds=base_embs,
+        #         attention_mask=attention_mask,
+        #         max_new_tokens=50,
+        #         do_sample=True,
+        #         pad_token_id=tokenizer.eos_token_id
+        #     )
+        #     base_gen = tokenizer.decode(base_gen_ids[0], skip_special_tokens=True)
+        #     print(f"<base generation start>{gen_prompt}{base_gen}<base generation end>\n")
+
 
     print(
         "\n","="*100, "\n", 

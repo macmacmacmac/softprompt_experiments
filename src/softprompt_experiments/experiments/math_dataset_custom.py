@@ -34,29 +34,31 @@ def run(args_list):
 
     # generate dataset
     exprs = [
-        "((x**2) + (y**2) + (z**2))**(1/2)",
-        "(4/3) * (3.14) * x * y * z",
-        "(x%2) * (y%2) * (z%2)",
-        "(x+y+z) % 2",
-        "100*x + 10*y + z"
+        "(6.673e-11) * (x*y)/(z**2)",
+        "(8.99e9) * (x*y)/(z**2)",
+        # "(4/3) * (3.14) * x * y * z",
+        # "(x**2 + y**2 + z**2)**(1/2)",
+        # "(x%2) + (y%2) + (z%2)"
     ]
     def expr_to_func(expr):        
         func = np.vectorize(lambda x, y, z: eval(expr))
         return func, expr
 
     def get_sentences_from_func(func):
-        x = np.random.randint(low=0, high=10, size=NUM_SAMPLES_PER)
-        y = np.random.randint(low=0, high=10, size=NUM_SAMPLES_PER)
-        z = np.random.randint(low=0, high=10, size=NUM_SAMPLES_PER)
+        x = np.random.randint(low=1, high=10, size=NUM_SAMPLES_PER)
+        y = np.random.randint(low=1, high=10, size=NUM_SAMPLES_PER)
+        z = np.random.randint(low=1, high=10, size=NUM_SAMPLES_PER)
 
         outputs = func(x, y, z)
 
         input_sentences = [
-            f"Input: x={x}, y={y}, z={z}\nOutput: " 
+            # f"Input: ({x},{y},{z})\nOutput: " 
+            f"Input: m1={x},m2={y},r={z}\n Answer: "
             for x,y,z in zip(x,y,z)
         ]
 
-        target_sentences = [f"{out}" for out in outputs]
+        # target_sentences = [f"{out:.2f}" for out in outputs]
+        target_sentences = [f"{out:.3e} N" for out in outputs]
 
         return input_sentences, target_sentences
 

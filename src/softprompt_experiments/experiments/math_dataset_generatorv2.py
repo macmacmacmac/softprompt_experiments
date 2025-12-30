@@ -43,6 +43,7 @@ def run(args_list):
         var_choices = ["x", "y", "z"]
         num_vars = np.random.choice([1, 2, 3], p=[0.2, 0.3, 0.5])
         vars_used = np.random.choice(var_choices, size=num_vars, replace=False)
+        vars_used = sorted(vars_used, key=var_choices.index)
         
         # Create coefficient mapping for used vars
         coefs = {v: np.random.randint(1, 10) for v in vars_used}

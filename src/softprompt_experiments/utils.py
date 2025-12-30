@@ -20,6 +20,8 @@ from softprompt_experiments.models.squishyprompt import SquishyPrompt
 
 import json
 
+import matplotlib.pyplot as plt
+
 def log_json(save_dir, data):
     with open(save_dir, 'w') as f:
         json.dump(data, f, indent=4) # indent for pretty printing
@@ -116,11 +118,74 @@ def get_train_test_from_softprompt_logits(
         dataset_dirs: List of dataset folder paths containing softprompt.pt files inside
         batchsize: Batch size for DataLoader
         train_portion: Fraction of data to use for training (rest is test)
-        use_parsability: if true, loads squishyprompts instead
     
     Returns:
         train_loader, test_loader (PyTorch DataLoader objects)
     """
+
+    softprompt_paths = []
+    hard_prompts = []
+
+    # for dataset_dir in tqdm(dataset_dirs, desc="loading softprompts..."):
+    #     sp_path = os.path.join(dataset_dir, "softprompt.pt")
+    #     if os.path.isfile(sp_path):
+    #         softprompt_paths.append(sp_path)
+
+    #         loaded = torch.load(
+    #             os.path.join(dataset_dir, "dataset.pt"),
+    #             weights_only=False
+    #         )
+    #         hard_prompts.append(loaded["hardprompt"])
+    # class SoftpromptLogitsDataset(torch.utils.data.Dataset):
+    #     def __init__(self, softprompt_paths, hard_prompts, tokenizer):
+    #         self.softprompt_paths = softprompt_paths
+
+    #         tok = tokenizer(
+    #             hard_prompts,
+    #             padding="longest",
+    #             return_tensors="pt"
+    #         )
+    #         self.hardprompt_ids = tok["input_ids"]  # CPU
+
+    #     def __len__(self):
+    #         return len(self.softprompt_paths)
+
+    #     def __getitem__(self, idx):
+    #         # load ONE softprompt
+    #         soft_logit = torch.load(
+    #             self.softprompt_paths[idx],
+    #             map_location="cpu"
+    #         )
+
+    #         hard_ids = self.hardprompt_ids[idx]
+
+    #         return soft_logit, hard_ids
+
+    # dataset = SoftpromptLogitsDataset(
+    #     softprompt_paths,
+    #     hard_prompts,
+    #     tokenizer
+    # )
+
+    # train_dataset, test_dataset = random_split(
+    #     dataset,
+    #     [train_size, test_size]
+    # )
+
+    # train_loader = DataLoader(
+    #     train_dataset,
+    #     batch_size=batchsize,
+    #     shuffle=True,
+    #     pin_memory=True,
+    # )
+
+    # test_loader = DataLoader(
+    #     test_dataset,
+    #     batch_size=batchsize,
+    #     shuffle=False,
+    #     pin_memory=True,
+    # )
+
     soft_logits = []
     hard_prompts = []
     for dataset_dir in tqdm(dataset_dirs, desc='loading softprompts...'):
@@ -128,7 +193,7 @@ def get_train_test_from_softprompt_logits(
             softprompt = SoftPrompt(
                 model=model,
                 word_embeddings=word_embeddings,
-                path_to_model = dataset_dir
+                path_to_model = os.path.join(dataset_dir, "softprompt.pt")
             )
             loaded = torch.load(os.path.join(dataset_dir, "dataset.pt"), weights_only=False)
 
@@ -140,16 +205,36 @@ def get_train_test_from_softprompt_logits(
     
     print(f"Loaded {len(soft_logits)} softprompts...")
 
-    with torch.no_grad():
-        tokenized_hardprompts = tokenizer(
-            hard_prompts,
-            padding='longest',
-            return_tensors='pt'
-        )['input_ids'].to(model.device)
-        softlogit_embeds = torch.cat(soft_logits, dim=0) @ word_embeddings.weight
-        hardprompt_embeds = word_embeddings(tokenized_hardprompts)
-    dataset = TensorDataset(softlogit_embeds, hardprompt_embeds, tokenized_hardprompts)
-
+    class SoftpromptLogitsDataset(torch.utils.data.Dataset):
+        def __init__(self, soft_logits, hard_prompts, model, word_embeddings, tokenizer):
+            self.soft_logits = soft_logits
+            self.hard_prompts = hard_prompts
+            self.tokenized_hardprompts = tokenizer(
+                hard_prompts,
+                padding='longest',
+                return_tensors='pt'
+            )['input_ids'].to(model.device)
+            self.model = model
+            self.word_embeddings = word_embeddings
+            self.tokenizer = tokenizer
+        def __len__(self):
+            return len(self.soft_logits)
+        def __getitem__(self, idx):
+            with torch.no_grad():
+                softlogit_embeds = self.soft_logits[idx].squeeze(0) #@ self.word_embeddings.weight
+                hardprompt_embeds = self.word_embeddings(self.tokenized_hardprompts[idx])
+            return softlogit_embeds, hardprompt_embeds, self.tokenized_hardprompts[idx]
+        
+    dataset = SoftpromptLogitsDataset(soft_logits, hard_prompts, model, word_embeddings, tokenizer)
+    # with torch.no_grad():
+    #     tokenized_hardprompts = tokenizer(
+    #         hard_prompts,
+    #         padding='longest',
+    #         return_tensors='pt'
+    #     )['input_ids'].to(model.device)
+    #     softlogit_embeds = torch.cat(soft_logits, dim=0) @ word_embeddings.weight
+    #     hardprompt_embeds = word_embeddings(tokenized_hardprompts)
+    # dataset = TensorDataset(softlogit_embeds, hardprompt_embeds, tokenized_hardprompts)
     # Compute train/test split
     total_size = len(dataset)
     train_size = int(total_size * train_portion)
@@ -157,11 +242,105 @@ def get_train_test_from_softprompt_logits(
 
     train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
 
-    # Create DataLoaders
+    # # Create DataLoaders
     train_loader = DataLoader(train_dataset, batch_size=batchsize, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batchsize, shuffle=False)
 
     return train_dataset, test_dataset, train_loader, test_loader
+
+def get_train_test_from_softprompt_embeds(
+    model: AutoModelForCausalLM,
+    word_embeddings: Embedding, 
+    tokenizer: PreTrainedTokenizerBase, 
+    dataset_dirs: List[str], 
+    batchsize: int, 
+    train_portion: float = 0.8,
+    return_centroid: bool = True
+):
+    """
+    Load a tokenized dataset generated by tokenize_and_save(), 
+    split it based on train_portion, then return train and test loaders for PyTorch.
+    
+    Args:
+        model: an instance of HF's AutoModelForCausalLM
+        word_embeddings: an Embedding from hf's model.get_input_embeddings()
+        tokenizer: tokenizer to be used for tokenizing hardpomprt groundtruth
+        dataset_dirs: List of dataset folder paths containing softprompt.pt files inside
+        batchsize: Batch size for DataLoader
+        train_portion: Fraction of data to use for training (rest is test)
+        return_centroid: whether to return the mean of the embeddings
+    
+    Returns:
+        train_loader, test_loader (PyTorch DataLoader objects)
+    """
+
+    soft_embeds = []
+    hard_prompts = []
+    for dataset_dir in tqdm(dataset_dirs, desc='loading softprompts...'):
+        if os.path.isfile(os.path.join(dataset_dir, "softprompt.pt")):
+            softprompt = SoftPrompt(
+                model=model,
+                word_embeddings=word_embeddings,
+                path_to_model = os.path.join(dataset_dir, "softprompt.pt")
+            )
+            loaded = torch.load(os.path.join(dataset_dir, "dataset.pt"), weights_only=False)
+
+            hard_prompt = loaded['hardprompt']
+            hard_prompts.append(hard_prompt)
+            
+            with torch.no_grad():
+                soft_embed = softprompt.forward()
+                soft_embeds.append(soft_embed)
+    
+    print(f"Loaded {len(soft_embeds)} softprompts...")
+
+    centroid = torch.mean(torch.cat(soft_embeds,dim=0), dim=0)
+
+    class SoftpromptEmbedsDataset(torch.utils.data.Dataset):
+        def __init__(self, soft_embeds, hard_prompts, model, word_embeddings, tokenizer):
+            self.soft_embeds = soft_embeds
+            self.hard_prompts = hard_prompts
+            self.tokenized_hardprompts = tokenizer(
+                hard_prompts,
+                padding='longest',
+                return_tensors='pt'
+            )['input_ids'].to(model.device)
+            self.model = model
+            self.word_embeddings = word_embeddings
+            self.tokenizer = tokenizer
+        def __len__(self):
+            return len(self.soft_embeds)
+        def __getitem__(self, idx):
+            with torch.no_grad():
+                softlogit_embeds = self.soft_embeds[idx].squeeze(0) #@ self.word_embeddings.weight
+                hardprompt_embeds = self.word_embeddings(self.tokenized_hardprompts[idx])
+            return softlogit_embeds, hardprompt_embeds, self.tokenized_hardprompts[idx]
+        
+    dataset = SoftpromptEmbedsDataset(soft_embeds, hard_prompts, model, word_embeddings, tokenizer)
+    # with torch.no_grad():
+    #     tokenized_hardprompts = tokenizer(
+    #         hard_prompts,
+    #         padding='longest',
+    #         return_tensors='pt'
+    #     )['input_ids'].to(model.device)
+    #     softlogit_embeds = torch.cat(soft_logits, dim=0) @ word_embeddings.weight
+    #     hardprompt_embeds = word_embeddings(tokenized_hardprompts)
+    # dataset = TensorDataset(softlogit_embeds, hardprompt_embeds, tokenized_hardprompts)
+    # Compute train/test split
+    total_size = len(dataset)
+    train_size = int(total_size * train_portion)
+    test_size = total_size - train_size
+
+    train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+
+    # # Create DataLoaders
+    train_loader = DataLoader(train_dataset, batch_size=batchsize, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batchsize, shuffle=False)
+
+    if return_centroid:
+        return train_dataset, test_dataset, train_loader, test_loader, centroid
+    return train_dataset, test_dataset, train_loader, test_loader
+
 
 def train_softprompt_from_embeds(
     softprompt: SoftPrompt,
@@ -181,9 +360,9 @@ def train_softprompt_from_embeds(
     epochs: number of epochs to train
     verbose: whether to print losses after each epoch
     """
-    model = softprompt.model
-    dtype = model.dtype
-    device = model.device
+    model = softprompt._model
+    dtype = model._dtype
+    device = model._device
 
     # Freeze LM
     model.requires_grad_(False)
@@ -200,7 +379,9 @@ def train_softprompt_from_embeds(
         train_loss = 0.0
 
         for batch in train_loader:
-            input_embeds, labels = [b.to(device) for b in batch]
+            # input_embeds, labels = [b.to(device) for b in batch]
+            input_logits, labels = [b.to(device) for b in batch]
+            input_embeds = input_logits @ model.get_input_embeddings().weight
             batchsize = input_embeds.size(0)
             # softprompt embeddings
             sp_embeds = softprompt.forward()   # [1, soft_len, dim]
@@ -231,7 +412,10 @@ def train_softprompt_from_embeds(
 
         with torch.no_grad():
             for batch in test_loader:
-                input_embeds, labels = [b.to(device) for b in batch]
+                # input_embeds, labels = [b.to(device) for b in batch]
+                input_logits, labels = [b.to(device) for b in batch]
+                input_embeds = input_logits @ model.get_input_embeddings().weight
+
                 batchsize = input_embeds.size(0)
                 # softprompt embeddings
                 sp_embeds = softprompt.forward()   # [1, soft_len, dim]
@@ -279,9 +463,9 @@ def train_softprompt_from_tokenized(
     verbose: whether to print losses after each epoch
     """
 
-    model = softprompt.model
-    tokenizer = softprompt.tokenizer
-    word_embeddings = softprompt.word_embeddings
+    model = softprompt._model
+    tokenizer = softprompt._tokenizer
+    word_embeddings = softprompt._word_embeddings
     dtype = model.dtype
     device = model.device
 
@@ -395,9 +579,9 @@ def eval_softprompt(softprompt: SoftPrompt, test_dataset: TensorDataset):
     softprompt: an instance of softprompt_experiments.models.SoftPrompt
     test_dataset: a TensorDataset object with input_ids and labels
     """
-    model = softprompt.model
-    tokenizer = softprompt.tokenizer
-    word_embeddings = softprompt.word_embeddings
+    model = softprompt._model
+    tokenizer = softprompt._tokenizer
+    word_embeddings = softprompt._word_embeddings
     dtype = model.dtype
     device = model.device
     outputs = []
@@ -444,7 +628,7 @@ def parse_first_number(text: str):
     return None
 
 
-def eval_softprompt_regression(softprompt, test_dataset, return_raw=False):
+def eval_softprompt_regression(softprompt, test_dataset, fig_dir=None, return_raw=False):
     """
     Evaluates a softprompt on a test set containing integer regression targets.
 
@@ -462,9 +646,9 @@ def eval_softprompt_regression(softprompt, test_dataset, return_raw=False):
         }
         (optionally) raw_records = [...]
     """
-    model = softprompt.model
-    tokenizer = softprompt.tokenizer
-    word_embeddings = softprompt.word_embeddings
+    model = softprompt._model
+    tokenizer = softprompt._tokenizer
+    word_embeddings = softprompt._word_embeddings
     dtype = model.dtype
     device = model.device
 
@@ -536,8 +720,126 @@ def eval_softprompt_regression(softprompt, test_dataset, return_raw=False):
         "pearson_r": r,
         "pearson_p": p,
     }
+    if fig_dir:
+        os.makedirs(fig_dir, exist_ok=True)
+        fig_path = os.path.join(fig_dir, "targets_vs_preds.png")
+
+        plt.figure()
+        plt.scatter(targets, preds, alpha=0.6)
+        plt.xlabel("Targets")
+        plt.ylabel("Predictions")
+        plt.title("Targets vs Predictions")
+
+        # y = x reference line
+        min_val = min(targets.min(), preds.min())
+        max_val = max(targets.max(), preds.max())
+        plt.plot([min_val, max_val], [min_val, max_val], linestyle="--")
+
+        # Metrics text box
+        metrics_text = (
+            f"MSE: {mse:.4g}\n"
+            f"MAE: {mae:.4g}\n"
+            f"Pearson r: {r:.4f}\n"
+            f"Pearson p: {p:.2e}"
+        )
+
+        plt.gca().text(
+            0.05,
+            0.95,
+            metrics_text,
+            transform=plt.gca().transAxes,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", alpha=0.8)
+        )
+
+        plt.tight_layout()
+        plt.savefig(fig_path, dpi=300)
+        plt.close()
 
     if return_raw:
         return metrics, raw_records
     return metrics
 
+import numpy as np
+from collections import Counter
+from typing import List, Callable, Dict
+
+# BLEU
+from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
+
+def eval_sequences(
+        generated: List[str],
+        targets: List[str],
+) -> Dict[str, float]:
+    """
+    Parameters
+    ----------
+    generated : list of generated strings
+    targets   : list of target strings
+    embedding_fn : function mapping List[str] -> np.ndarray [N, D]
+
+    Returns
+    -------
+    dict with averaged metrics
+    """
+
+    assert len(generated) == len(targets), "Lists must be parallel"
+
+    n = len(generated)
+
+    def normalize(text: str) -> List[str]:
+        """
+        Basic normalization:
+        - lowercase
+        - whitespace tokenization
+        """
+        return text.lower().strip().split()
+
+    def exact_match(pred: str, tgt: str) -> float:
+        return float(pred.strip() == tgt.strip())
+
+
+    def token_f1(pred: str, tgt: str) -> float:
+        pred_toks = normalize(pred)
+        tgt_toks = normalize(tgt)
+
+        if len(pred_toks) == 0 and len(tgt_toks) == 0:
+            return 1.0
+        if len(pred_toks) == 0 or len(tgt_toks) == 0:
+            return 0.0
+
+        pred_counts = Counter(pred_toks)
+        tgt_counts = Counter(tgt_toks)
+
+        overlap = sum((pred_counts & tgt_counts).values())
+
+        precision = overlap / len(pred_toks)
+        recall = overlap / len(tgt_toks)
+
+        if precision + recall == 0:
+            return 0.0
+
+        return 2 * precision * recall / (precision + recall)
+
+    # ---------- Exact Match ----------
+    em = np.mean([exact_match(p, t) for p, t in zip(generated, targets)])
+
+    # ---------- Token F1 ----------
+    f1 = np.mean([token_f1(p, t) for p, t in zip(generated, targets)])
+
+    # ---------- BLEU ----------
+    refs = [[normalize(t)] for t in targets]
+    hyps = [normalize(p) for p in generated]
+
+    bleu = corpus_bleu(
+        refs,
+        hyps,
+        smoothing_function=SmoothingFunction().method1,
+    )
+
+    return {
+        "exact_match": em,
+        "token_f1": f1,
+        "bleu": bleu,
+    }
+    

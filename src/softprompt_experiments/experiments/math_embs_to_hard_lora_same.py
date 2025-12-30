@@ -8,16 +8,20 @@ from transformers import (
 )
 from tqdm.auto import tqdm
 
+from itertools import chain
+
 from softprompt_experiments.models.softprompt import SoftPrompt
 from softprompt_experiments.utils import (
-    get_train_test_from_softprompt_logits, 
+    get_train_test_from_softprompt_embeds, 
     train_softprompt_from_embeds,
     eval_softprompt,
+    eval_sequences,
     log_json
 )
 
 import torch.nn.functional as F
 import torch.nn as nn
+from torch.optim import lr_scheduler
 
 def run(args_list):
     exp_name = os.path.basename(__file__)
@@ -29,10 +33,10 @@ def run(args_list):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--epochs", type=int, default=16)
+    parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--save_directory", type=str, default="./datasets/math_datasetv2")
-    parser.add_argument("--num_samples_to_eval", type=int, default=100)
+    parser.add_argument("--save_directory", type=str, default="./datasets/math_datasetv2_same20k")
+    parser.add_argument("--num_samples_to_eval", type=int, default=25)
     parser.add_argument("--r", type=int, default=8)
     parser.add_argument("--alpha", type=int, default=8)
     parser.add_argument("--verbose", type=bool, default=False)
@@ -73,15 +77,15 @@ def run(args_list):
         raise ValueError("path to directory has no datasets")
 
     # loads in a dataset of trained softprompts
-    train_dataset, test_dataset, train_loader, test_loader = get_train_test_from_softprompt_logits(
+    train_dataset, test_dataset, train_loader, test_loader, centroid = get_train_test_from_softprompt_embeds(
         model,
         word_embeddings,
         tokenizer,
         dataset_dirs,
         BATCH_SIZE,
         0.8,
+        True
     )
-
 
     # -----------------------
     # LOAD BASE MODEL
@@ -214,22 +218,50 @@ def run(args_list):
     # run replacement
     replace_linear_with_lora(model, r=LORA_R, alpha=LORA_ALPHA)
 
-    # collect LoRA params (trainable ones)
-    lora_parameters = [p for p in model.parameters() if p.requires_grad]
-    if len(lora_parameters) == 0:
-        raise RuntimeError("No LoRA parameters found to train. Check replacement filters.")
-
-    optimizer = torch.optim.AdamW(lora_parameters, lr=LR, weight_decay=0.1)
-
     # Suffix to mark end of input
-    suffix = " <OUT> "
+    suffix = " Input: x=1, y=2, z=3\nOutput:"
     suffix_ids = tokenizer(
         suffix,
         add_special_tokens=False,
         return_tensors='pt'
     )['input_ids'].to(model.device)
     SUFFIX_LEN = suffix_ids.shape[1]
-    suffix_emb = model.get_input_embeddings()(suffix_ids).to(model.dtype).detach()
+    suffix_emb = word_embeddings(suffix_ids).to(model.dtype).detach()
+
+    softprompt = SoftPrompt(
+        model=model,
+        init=" Input: x=1, y=2, z=3\nOutput: 1 2 3 4",
+        tokenizer=tokenizer,
+        word_embeddings=word_embeddings,
+        num_tokens=24
+    )
+
+    class Projector(nn.Module):
+        def __init__(self, dtype, device):
+            super().__init__()
+
+            self.bias = nn.Parameter(
+                torch.zeros((1, 8, 4096), dtype=dtype, device=device)
+            )
+            # self.linear = nn.Parameter(
+            #     torch.eye(4096,4096,dtype=dtype,device=device)
+            # )
+
+        def forward(self, x):
+            # return x + self.bias
+            return (x - centroid) + self.bias
+    
+    projector = Projector(dtype, device)
+
+    # collect LoRA params (trainable ones)
+    lora_parameters = [p for p in model.parameters() if p.requires_grad]
+    if len(lora_parameters) == 0:
+        raise RuntimeError("No LoRA parameters found to train. Check replacement filters.")
+
+    
+    optimizer = torch.optim.AdamW(list(projector.parameters())+list(lora_parameters), lr=LR, weight_decay=0.1)
+    # optimizer = torch.optim.Adam(chain(softprompt.parameters(), projector.parameters(), lora_parameters), lr=LR, weight_decay=0.1)
+    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=0)
 
     # -----------------------
     # TRAINING LOOP (with test loss logging)
@@ -246,19 +278,22 @@ def run(args_list):
 
         for batch in train_loader:
             optimizer.zero_grad()
-            softlogits, hardprompt_embeds, tokenized_hardprompt = [b.to(device) for b in batch]
-            softlogit_embeds = softlogits @ word_embeddings.weight
-            batched_suffixemb = suffix_emb.expand(softlogit_embeds.size(0), -1, -1)
+            softembeds, hardprompt_embeds, tokenized_hardprompt = [b.to(device) for b in batch]
+            batched_suffixemb = suffix_emb.expand(softembeds.size(0), -1, -1)
+            batched_softprompt = softprompt.forward().expand(softembeds.size(0), -1, -1)
 
             full_inputs = torch.cat([
-                softlogit_embeds.to(model.dtype),
-                batched_suffixemb,
-                hardprompt_embeds.to(model.dtype)
+                projector(softembeds.to(model.dtype)),
+                #batched_suffixemb,
+                batched_softprompt,
+                hardprompt_embeds.to(model.dtype),
             ], dim=1)
 
             labels = torch.cat([
-                torch.full((softlogit_embeds.shape[0], softlogit_embeds.shape[1]), -100).to(device),
-                torch.full((batched_suffixemb.shape[0], batched_suffixemb.shape[1]), -100).to(device),
+                torch.full((softembeds.shape[0], softembeds.shape[1]), -100).to(device),
+                #torch.full((batched_suffixemb.shape[0], batched_suffixemb.shape[1]), -100).to(device),
+                torch.full((batched_softprompt.shape[0], batched_softprompt.shape[1]), -100).to(device),
+
                 tokenized_hardprompt
             ], dim=1)
 
@@ -271,7 +306,6 @@ def run(args_list):
             optimizer.step()
 
             total_loss += loss.item()
-
         tr_loss = total_loss / len(train_loader)
         tr_losses.append(tr_loss)
 
@@ -282,20 +316,22 @@ def run(args_list):
         total_test_loss = 0.0
         with torch.no_grad():
             for batch in test_loader:
-                softlogits, hardprompt_embeds, tokenized_hardprompt = [b.to(device) for b in batch]
-                softlogit_embeds = softlogits @ word_embeddings.weight
+                softembeds, hardprompt_embeds, tokenized_hardprompt = [b.to(device) for b in batch]
                 
-                batched_suffixemb = suffix_emb.expand(softlogit_embeds.size(0), -1, -1)
+                #batched_suffixemb = suffix_emb.expand(softembeds.size(0), -1, -1)
+                batched_softprompt = softprompt.forward().expand(softembeds.size(0), -1, -1)
 
                 full_inputs = torch.cat([
-                    softlogit_embeds.to(model.dtype),
-                    batched_suffixemb,
+                    projector(softembeds.to(model.dtype)),
+                    #batched_suffixemb,
+                    batched_softprompt,
                     hardprompt_embeds.to(model.dtype)
                 ], dim=1)
 
                 labels = torch.cat([
-                    torch.full((softlogit_embeds.shape[0], softlogit_embeds.shape[1]), -100).to(device),
-                    torch.full((batched_suffixemb.shape[0], batched_suffixemb.shape[1]), -100).to(device),
+                    torch.full((softembeds.shape[0], softembeds.shape[1]), -100).to(device),
+                    #torch.full((batched_suffixemb.shape[0], batched_suffixemb.shape[1]), -100).to(device),
+                    torch.full((batched_softprompt.shape[0], batched_softprompt.shape[1]), -100).to(device),
                     tokenized_hardprompt
                 ], dim=1)
 
@@ -303,15 +339,32 @@ def run(args_list):
                 # outputs = model(inputs_embeds=input_embeds, labels=labels)
 
                 total_test_loss += outputs.loss.item()
+            
 
         te_loss = total_test_loss / len(test_loader)
         te_losses.append(te_loss)
 
-        print(f"Epoch {epoch} | Train Loss: {tr_loss:.4f} | Test Loss: {te_loss:.4f}")
+        scheduler.step(te_loss)
+
+        print(f"Epoch {epoch} | Train Loss: {tr_loss:.4f} | Test Loss: {te_loss:.4f} | LR: {optimizer.param_groups[0]["lr"]}")
 
     # -----------------------
     # SAMPLE PREDICTIONS
     # -----------------------
+    def pred(softembeds, hardprompt_embeds, tokenized_hardprompt):
+        full_inputs = torch.cat([
+            projector(softembeds.unsqueeze(0).to(model.dtype)),
+            # suffix_emb.to(model.dtype),
+            softprompt.forward(),
+        ], dim=1)
+        
+        max_new_tokens = len(tokenized_hardprompt)
+
+        pred_ids = model.generate(inputs_embeds=full_inputs, max_new_tokens=max_new_tokens)
+        pred_text = tokenizer.decode(pred_ids[0], skip_special_tokens=True)
+        hardprompt = tokenizer.decode(tokenized_hardprompt, skip_special_tokens=True)
+        return pred_text, hardprompt
+
     model.eval()
     with torch.no_grad():
         # --- TRAIN SET ---
@@ -319,41 +372,31 @@ def run(args_list):
             list(train_dataset), 
             min(NUM_SAMPLES_TO_EVAL, len(train_dataset))
         )
-        for softlogits, hardprompt_embeds, tokenized_hardprompt in train_samples:
-            softlogit_embeds = softlogits @ word_embeddings.weight
-            full_inputs = torch.cat([
-                softlogit_embeds.unsqueeze(0).to(model.dtype),
-                suffix_emb.to(model.dtype),
-            ], dim=1)
-            
-            max_new_tokens = len(tokenized_hardprompt)
-
-            pred_ids = model.generate(inputs_embeds=full_inputs, max_new_tokens=max_new_tokens)
-            pred_text = tokenizer.decode(pred_ids[0], skip_special_tokens=True)
-            hardprompt = tokenizer.decode(tokenized_hardprompt, skip_special_tokens=True)
-
-            print(f"Prediction (train): {pred_text}")
-            print(f"hardprompt (train): {hardprompt}\n")
         # --- TEST SET ---
         test_samples = random.sample(
             list(test_dataset),
             min(NUM_SAMPLES_TO_EVAL, len(test_dataset))
         )
-        for softlogits, hardprompt_embeds, tokenized_hardprompt in train_samples:
-            softlogit_embeds = softlogits @ word_embeddings.weight
-            full_inputs = torch.cat([
-                softlogit_embeds.unsqueeze(0).to(model.dtype),
-                suffix_emb.to(model.dtype),
-            ], dim=1)
 
-            max_new_tokens = len(tokenized_hardprompt)
-
-            pred_ids = model.generate(inputs_embeds=full_inputs, max_new_tokens=max_new_tokens)
-            pred_text = tokenizer.decode(pred_ids[0], skip_special_tokens=True)
-            hardprompt = tokenizer.decode(tokenized_hardprompt, skip_special_tokens=True)
-
+        for softembeds, hardprompt_embeds, tokenized_hardprompt in train_samples:
+            pred_text, hardprompt = pred(softembeds, hardprompt_embeds, tokenized_hardprompt)
+            print(f"Prediction (train): {pred_text}")
+            print(f"hardprompt (train): {hardprompt}\n")
+        for softembeds, hardprompt_embeds, tokenized_hardprompt in test_samples:
+            pred_text, hardprompt = pred(softembeds, hardprompt_embeds, tokenized_hardprompt)
             print(f"Prediction (test): {pred_text}")
             print(f"hardprompt (test): {hardprompt}\n")
+        
+        # serious eval
+        pred_texts = []
+        hardprompts = []
+        for softembeds, hardprompt_embeds, tokenized_hardprompt in test_dataset:
+            pred_text, hardprompt = pred(softembeds, hardprompt_embeds, tokenized_hardprompt)
+            pred_texts.append(pred_text)
+            hardprompts.append(hardprompt)
+        performance = eval_sequences(pred_texts, hardprompts)
+        print(performance)
+        log_json(SAVE_DIR, "translator_performance.json")
 
     print(
         "\n","="*100, "\n", 

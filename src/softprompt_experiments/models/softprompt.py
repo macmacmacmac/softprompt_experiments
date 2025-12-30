@@ -20,9 +20,9 @@ class SoftPrompt(nn.Module):
     def __init__(self, model=None, init=None, tokenizer=None, word_embeddings=None, path_to_model=None, num_tokens=8):
         super().__init__()
 
-        self.tokenizer = tokenizer
-        self.model = model
-        self.word_embeddings = word_embeddings
+        object.__setattr__(self, "_tokenizer", tokenizer)
+        object.__setattr__(self, "_model", model)
+        object.__setattr__(self, "_word_embeddings", word_embeddings)
 
         self.num_tokens = num_tokens
 
@@ -35,7 +35,7 @@ class SoftPrompt(nn.Module):
             vocab_size = word_embeddings.num_embeddings
             if init is not None:
                 init_text = init
-                init_token_ids = tokenizer(init_text)["input_ids"]
+                init_token_ids = tokenizer(init_text, add_special_tokens=False)["input_ids"]
                 # Trim or iterate until num_text_tokens matches total_virtual_tokens
                 num_text_tokens = len(init_token_ids)
                 if num_text_tokens > num_tokens:
@@ -55,12 +55,19 @@ class SoftPrompt(nn.Module):
             self.initial_embeddings = copy.deepcopy(word_embedding_weights)
         else:
             self.load_softprompt(path_to_model)
+
+    def set_prompt_embeddings(self, new):
+        if len(new.shape) == 2:
+            with torch.no_grad():
+                self.prompt_embeddings.data = new # Reassigns the underlying data
+        else:
+            raise ValueError(f"new prompt embeddings must be of shape [num_tokens, dim], found: {new.shape}")
     
     def forward(self):
         return self.prompt_embeddings.unsqueeze(0)  # [1, num_tokens, embed_dim]
 
     def loss_fn(self, input_embeds, labels):
-        outputs = self.model(
+        outputs = self._model(
             inputs_embeds=input_embeds,
             attention_mask=None,    # attention is fully allowed
             labels=labels   # HF automatically computes CE
@@ -84,33 +91,33 @@ class SoftPrompt(nn.Module):
                 sp_embeds = sp_embeds.expand(len(embeds), -1, -1) #[batchsize, soft_len, dim]
                 full_embs = torch.cat([sp_embeds,embeds],dim=1)
                 if suffix_str:
-                    ids = self.tokenizer(suffix_str, return_tensors="pt").input_ids.to(self.model.device)
-                    suffix_embs = self.word_embeddings(ids).to(dtype=self.model.dtype)
+                    ids = self._tokenizer(suffix_str, return_tensors="pt").input_ids.to(self._model.device)
+                    suffix_embs = self._word_embeddings(ids).to(dtype=self._model.dtype)
                     full_embs = torch.cat([full_embs, suffix_embs], dim=1)
                 attention_mask = torch.ones(full_embs.size()[:-1], device=full_embs.device, dtype=torch.long)
-                output_ids = self.model.generate(
+                output_ids = self._model.generate(
                     inputs_embeds=full_embs,
                     attention_mask=attention_mask,
                     max_new_tokens=max_new_tokens,
                     do_sample=do_sample,
-                    pad_token_id=self.tokenizer.eos_token_id
+                    pad_token_id=self._tokenizer.eos_token_id
                 )
             else:
                 full_embs = self.forward()   # [1, soft_len, dim]
                 if suffix_str:
-                    ids = self.tokenizer(suffix_str, return_tensors="pt").input_ids.to(self.model.device)
-                    suffix_embs = self.word_embeddings(ids).to(dtype=self.model.dtype)
+                    ids = self._tokenizer(suffix_str, return_tensors="pt").input_ids.to(self._model.device)
+                    suffix_embs = self._word_embeddings(ids).to(dtype=self._model.dtype)
                     full_embs = torch.cat([full_embs, suffix_embs], dim=1)
                 attention_mask = torch.ones(full_embs.size()[:-1], device=full_embs.device, dtype=torch.long)
-                output_ids = self.model.generate(
+                output_ids = self._model.generate(
                     inputs_embeds=full_embs,
                     attention_mask=attention_mask,
                     max_new_tokens=max_new_tokens,
                     do_sample=do_sample,
-                    pad_token_id=self.tokenizer.eos_token_id
+                    pad_token_id=self._tokenizer.eos_token_id
                 )
             
-        output = self.tokenizer.batch_decode(
+        output = self._tokenizer.batch_decode(
             output_ids, skip_special_tokens=True
         )
         return output
@@ -125,7 +132,7 @@ class SoftPrompt(nn.Module):
         torch.save(state_dict, os.path.join(path_to_save, "softprompt.pt"))
     
     def load_softprompt(self, path_to_load):
-        state_dict = torch.load(os.path.join(path_to_load, "softprompt.pt"))
+        state_dict = torch.load(path_to_load)
         self.initial_tokens = state_dict['initial_tokens']
         self.initial_embeddings = state_dict['initial_embeddings']
         self.num_tokens = state_dict['num_tokens']
@@ -142,7 +149,7 @@ class SoftPrompt(nn.Module):
         """
         with torch.no_grad():
             prompt_embedding = self.forward().squeeze(0) #[num_tokens, embed_dim]
-            base_embedding = self.word_embeddings.weight.data
+            base_embedding = self._word_embeddings.weight.data
 
             # print(prompt_embedding.shape) #8 by 4096
             # print(base_embedding) # 128256 by 4096
@@ -153,7 +160,7 @@ class SoftPrompt(nn.Module):
             cos_sim = norm_embed @ norm_base.T
             nearest_idx = torch.argmax(cos_sim, dim=1).cpu().tolist()
 
-            discrete_prompt = self.tokenizer.decode(nearest_idx)
+            discrete_prompt = self._tokenizer.decode(nearest_idx)
 
         return nearest_idx, discrete_prompt
     
@@ -168,20 +175,20 @@ class SoftPrompt(nn.Module):
         """
         with torch.no_grad():
             prompt_embedding = self.forward().squeeze(0) #[num_tokens, embed_dim]
-            base_embedding = self.word_embeddings
+            base_embedding = self._word_embeddings
 
             logits, probs = self.get_prompt_logits()
             topk_vals, topk_idx = probs.topk(k, dim=-1)
 
             decodeds = []
             for i in range(logits.size(0)):
-                toks = [self.tokenizer.decode(tid) for tid in topk_idx[i]]
+                toks = [self._tokenizer.decode(tid) for tid in topk_idx[i]]
                 decodeds.append(toks)
         return decodeds, topk_vals
     
     def _get_prompt_logits(self):
         prompt_embeds = self.forward()
-        logits = self.model(inputs_embeds=prompt_embeds, output_hidden_states=False, use_cache=False).logits
+        logits = self._model(inputs_embeds=prompt_embeds, output_hidden_states=False, use_cache=False).logits
         logits = logits[:, :self.num_tokens-1, :]  # align with next-token positions
         probs = F.softmax(logits, dim=-1)
 
@@ -207,7 +214,7 @@ class SoftPrompt(nn.Module):
 
         logits, probs = self._get_prompt_logits()
 
-        vocab_embed_mat = self.word_embeddings.weight
+        vocab_embed_mat = self._word_embeddings.weight
         weighted_avg = probs @ vocab_embed_mat  # [1, seq_len-1, hidden_dim]
         weighted_avg = weighted_avg.squeeze(0)
         

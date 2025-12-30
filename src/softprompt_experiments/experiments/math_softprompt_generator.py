@@ -7,6 +7,8 @@ from transformers import (
 )
 from tqdm.auto import tqdm
 
+import numpy as np
+
 from softprompt_experiments.models.softprompt import SoftPrompt
 from softprompt_experiments.models.squishyprompt import SquishyPrompt
 from softprompt_experiments.utils import (
@@ -33,7 +35,7 @@ def run(args_list):
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lambd", type=float, default=1.)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
-    parser.add_argument("--use_parsability", type=bool, default=False)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--verbose", type=bool, default=False)
     args, _ = parser.parse_known_args(args_list)
     
@@ -44,6 +46,7 @@ def run(args_list):
     NUM_TOKENS = args.num_tokens
     BATCH_SIZE = args.batch_size
     LAMBDA = args.lambd
+    SEED = args.seed
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
@@ -79,24 +82,24 @@ def run(args_list):
         )
 
         # initialize softprompt
-        softprompt = None
-        if args.use_parsability:
-            softprompt = SquishyPrompt(
-                model=model,
-                init=args.init,
-                tokenizer=tokenizer, 
-                word_embeddings=word_embeddings, 
-                num_tokens=NUM_TOKENS,
-                lambd=LAMBDA
-            )
+        if SEED is not None:
+            vocab_size = word_embeddings.num_embeddings
+            rng = np.random.default_rng(seed=SEED)
+            init_token_ids = torch.from_numpy(
+                rng.integers(0, vocab_size, size=NUM_TOKENS, dtype=np.int64)
+            ).to(model.device)
+            init = tokenizer.decode(init_token_ids)
         else:
-            softprompt = SoftPrompt(
-                model=model, 
-                init=args.init,
-                tokenizer=tokenizer, 
-                word_embeddings=word_embeddings, 
-                num_tokens=NUM_TOKENS
-            )
+            init = args.init
+        
+        print("Initial tokens: ", init)
+        softprompt = SoftPrompt(
+            model=model, 
+            init=init,
+            tokenizer=tokenizer, 
+            word_embeddings=word_embeddings, 
+            num_tokens=NUM_TOKENS
+        )
         
         # begin training
         train_loss, test_loss, parsability = train_softprompt_from_tokenized(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
@@ -108,7 +111,7 @@ def run(args_list):
 
         # if verbose: generate sample output predictions using eval_softprompt
         if args.verbose:
-            outputs = eval_softprompt_regression(softprompt, test_dataset)
+            outputs = eval_softprompt_regression(softprompt, test_dataset, dataset_dir)
             print(outputs)
             performance = {
                 'hardprompt':hardprompt,
@@ -117,8 +120,7 @@ def run(args_list):
                 'parsability':parsability,
                 'outputs': outputs
             }
-            soft_or_squishy = "squishyprompt" if args.use_parsability else "softprompt"
-            log_json(os.path.join(dataset_dir,f'{soft_or_squishy}_performance.json'), performance)
+            log_json(os.path.join('softprompt_performance.json'), performance)
         else:
             parsability = softprompt.get_parsability().item()
             performance = {
@@ -127,8 +129,7 @@ def run(args_list):
                 'test_loss':test_loss,
                 'parsability':parsability,
             }
-            soft_or_squishy = "squishyprompt" if args.use_parsability else "softprompt"
-            log_json(os.path.join(dataset_dir,f'{soft_or_squishy}_performance.json'), performance)
+            log_json(os.path.join('softprompt_performance.json'), performance)
 
         softprompt.save_softprompt(dataset_dir)
 

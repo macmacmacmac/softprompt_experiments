@@ -2,10 +2,10 @@
 #SBATCH -N 1                    
 #SBATCH -n 1
 #SBATCH -c 1 
-#SBATCH --mem=24g                
+#SBATCH --mem=8g                
 #SBATCH -J "llm softprompt job"    
 #SBATCH -p short                
-#SBATCH -t 18:00:00             
+#SBATCH -t 60          
 #SBATCH --gres=gpu:1            
 #SBATCH -C "A100"
 
