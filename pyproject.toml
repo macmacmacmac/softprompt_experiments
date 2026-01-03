@@ -28,7 +28,8 @@ dependencies = [
     "openai",
     "tiktoken",
     "sentencepiece",
-    "nltk"
+    "nltk",
+    "statsmodels"
 ]
 
 # Optional but recommended: explicitly define where packages live.
