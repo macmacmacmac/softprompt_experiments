@@ -6,7 +6,7 @@ from transformers import (
     AutoModelForCausalLM,
 )
 from tqdm.auto import tqdm
-
+import json 
 import numpy as np
 
 from softprompt_experiments.models.softprompt import SoftPrompt
@@ -28,25 +28,13 @@ def run(args_list):
     )
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--init", type=str, default=None)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--epochs", type=int, default=6)
-    parser.add_argument("--num_tokens", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--lambd", type=float, default=1.)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--verbose", type=bool, default=False)
     args, _ = parser.parse_known_args(args_list)
     
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     SAVE_DIR = args.save_directory
-    LR = args.lr
-    EPOCHS = args.epochs
-    NUM_TOKENS = args.num_tokens
     BATCH_SIZE = args.batch_size
-    LAMBDA = args.lambd
-    SEED = args.seed
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
@@ -80,58 +68,32 @@ def run(args_list):
             BATCH_SIZE,
             train_portion = 0.8
         )
-
-        # initialize softprompt
-        if SEED is not None:
-            vocab_size = word_embeddings.num_embeddings
-            rng = np.random.default_rng(seed=SEED)
-            init_token_ids = torch.from_numpy(
-                rng.integers(0, vocab_size, size=NUM_TOKENS, dtype=np.int64)
-            ).to(model.device)
-            init = tokenizer.decode(init_token_ids)
-        else:
-            init = args.init
         
         # print("Initial tokens: ", init)
         softprompt = SoftPrompt(
             model=model, 
-            init=init,
             tokenizer=tokenizer, 
             word_embeddings=word_embeddings, 
-            num_tokens=NUM_TOKENS
+            path_to_model=os.path.join(dataset_dir, "softprompt.pt")
         )
         
-        # begin training
-        train_loss, test_loss, parsability = train_softprompt_from_tokenized(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
-
         hardprompt = torch.load(
             os.path.join(dataset_dir,'dataset.pt'),
             weights_only=False
         )['hardprompt']
 
-        # if verbose: generate sample output predictions using eval_softprompt
-        if args.verbose:
-            outputs = eval_softprompt_regression(softprompt, test_dataset, dataset_dir)
-            print(outputs)
-            performance = {
-                'hardprompt':hardprompt,
-                'train loss':train_loss,
-                'test_loss':test_loss,
-                'parsability':parsability,
-                'outputs': outputs
-            }
-            log_json(os.path.join('softprompt_performance.json'), performance)
-        else:
-            parsability = softprompt.get_parsability().item()
-            performance = {
-                'hardprompt':hardprompt,
-                'train loss':train_loss,
-                'test_loss':test_loss,
-                'parsability':parsability,
-            }
-            log_json(os.path.join('softprompt_performance.json'), performance)
+        outputs = eval_softprompt_regression(softprompt, test_dataset, dataset_dir)
+        performance = {
+            'hardprompt':hardprompt,
+            'outputs': outputs
+        }
+        print(dataset_dir, performance)
+        # log_json(os.path.join('softprompt_performance.json'), performance)
 
-        softprompt.save_softprompt(dataset_dir)
+        with open(os.path.join(dataset_dir,'explanations.json')) as f:
+            data = json.load(f)
+        data['performance'] = outputs
+        log_json(os.path.join(dataset_dir, "explanations.json"), data)
 
     print(
         "\n","="*100, "\n", 

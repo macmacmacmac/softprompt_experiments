@@ -35,9 +35,9 @@ def run(args_list):
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--save_directory", type=str, default="./datasets/math_datasetv2_large")
+    parser.add_argument("--save_directory", type=str, default="./datasets/math_datasetv2_20k")
     parser.add_argument("--num_samples_to_eval", type=int, default=25)
-    parser.add_argument("--r", type=int, default=128)
+    parser.add_argument("--r", type=int, default=16)
     parser.add_argument("--alpha", type=float, default=16.)
     parser.add_argument("--verbose", type=bool, default=False)
 

@@ -46,15 +46,15 @@ def run(args_list):
             'output_template': "{out:.3e} m/s"
         },
         {
-            #e = mc^2
-            'expr': "x * (2.998e8**2)",
-            'input_template': "Input: m={x} kg\n Answer: ",
-            'output_template': "{out:.3e} J"
+            #scpacetime interval
+            'expr': "(x * 2.998e8)**2 - (y)**2 - (z)**2",
+            'input_template': "Input: dt={x}, dx={y}, dy={z}\n Answer: ",
+            'output_template': "{out:.3e}"
         },
         {
-            #photon energy
-            'expr': "(6.626e-34 * 2.998e8) / x",
-            'input_template': "Input: λ={x} m\n Answer: ",
+            #relative energy
+            'expr': "((1 / (1 - (y**2)/(2.998e8)**2)**0.5) - 1) * x * (2.998e8)**2",
+            'input_template': "Input: m={x},v={y}\n Answer: ",
             'output_template': "{out:.3e} J"
         },
         {
@@ -72,14 +72,14 @@ def run(args_list):
         {
             #number of particles from mass
             'expr': "(6.022e23) * x/y",
-            'input_template': "Input: m={x} g, M={y} g/mol\n Answer: ",
+            'input_template': "Input: m={x}, M={y}\n Answer: ",
             'output_template': "{out:.3e} particles"
         },
         {
             #faraday constant definition
-            'expr': "6.022e23 * x",
-            'input_template': "Input: e={x} C\n Answer: ",
-            'output_template': "{out:.3e} C/mol"
+            'expr': "(x * 1e24/ 6.022e23) * y",
+            'input_template': "Input: N={x}, M={y}\n Answer: ",
+            'output_template': "{out:.3e} g"
         },
         {
             #kinetic energy
@@ -94,14 +94,14 @@ def run(args_list):
             'output_template': "{out:.3e} m/s"
         },
         {
-            # Ideal gas density
+            # Ideal gas law
             'expr': "(8.3145) * y * z / x",
             'input_template': "Input: P={x},n={y},T={z}\n Answer: ",
-            'output_template': "{out:.3e} kg/m³"
+            'output_template': "{out:.3e} m³"
         },
         {
             #volume of an ellipsoid ish
-            'expr': "3.1415*x*y*z",
+            'expr': "(4/3)*3.1415*x*y*z",
             'input_template': "Input: a={x},b={y},c={z}\n Answer: ",
             'output_template': "{out:.3f}"
         },
@@ -110,10 +110,24 @@ def run(args_list):
         func = np.vectorize(lambda x, y, z: eval(expr))
         return func, expr
 
-    def get_sentences_from_func(func, input_template, output_template):
-        x = np.random.randint(low=1, high=10, size=NUM_SAMPLES_PER)
-        y = np.random.randint(low=1, high=10, size=NUM_SAMPLES_PER)
-        z = np.random.randint(low=1, high=10, size=NUM_SAMPLES_PER)
+    def get_sentences_from_func(func, input_template, output_template, num_samples, num_vars):
+        # x = np.random.randint(low=1, high=1000, size=num_samples)
+        # y = np.random.randint(low=1, high=1000, size=num_samples)
+        # z = np.random.randint(low=1, high=1000, size=num_samples)
+
+        triples = set()
+
+        high = 10 if num_vars > 2 else 100
+
+        while len(triples) < num_samples:
+            triple = (
+                np.random.randint(1, high),
+                np.random.randint(1, high),
+                np.random.randint(1, high),
+            )
+            triples.add(triple)
+
+        x, y, z = map(np.array, zip(*triples))
 
         outputs = func(x, y, z)
 
@@ -135,7 +149,10 @@ def run(args_list):
         input_template = formula['input_template']
         output_template = formula['output_template']
         func, expr = expr_to_func(expr)
-        input_sentences, target_sentences = get_sentences_from_func(func, input_template, output_template)
+        num_vars = ("x" in expr) + ("y" in expr) + ("z" in expr)
+        input_sentences, target_sentences = get_sentences_from_func(
+            func, input_template, output_template, NUM_SAMPLES_PER, num_vars
+        )
         
         print(input_sentences[0], target_sentences[0])
 

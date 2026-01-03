@@ -135,7 +135,7 @@ def run(args_list):
             input_text = tokenizer.decode(tokenized_text, skip_special_tokens=True)
             input_embed = word_embeddings(tokenized_text).unsqueeze(0)
 
-            soft_gen = softprompt.generate_from_embeds(embeds=input_embed, max_new_tokens=50, suffix_str=gen_prompt)[0]
+            soft_gen = softprompt.generate_from_embeds(embeds=input_embed, max_new_tokens=75, suffix_str=gen_prompt)[0]
             print(f"<soft generation start>{input_text}{gen_prompt}{soft_gen}<soft generation end>\n")
             soft_generations += (input_text + gen_prompt + soft_gen + "\n")
 
@@ -144,7 +144,7 @@ def run(args_list):
             base_gen_ids = model.generate(
                 inputs_embeds=base_embs,
                 attention_mask=attention_mask,
-                max_new_tokens=50,
+                max_new_tokens=75,
                 do_sample=True,
                 pad_token_id=tokenizer.eos_token_id
             )
