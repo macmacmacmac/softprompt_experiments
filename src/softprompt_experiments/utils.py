@@ -352,7 +352,7 @@ def train_softprompt_from_embeds(
     verbose: bool = False
 ):
     """
-    Trains a softprompt from a dataset of tokenized sequences
+    Trains a softprompt from a dataset of embedded sequences
 
     softprompt: instance of softprompt_experiments.models.SoftPrompt
     suffix_emb: the embedding of the suffix to make end of input
