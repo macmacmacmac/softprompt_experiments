@@ -27,7 +27,7 @@ def disable_lora(model):
             m.scaling = s
 
 class LoRALinear(nn.Module):
-    def __init__(self, orig_linear: nn.Linear, r: int = 4, alpha: float = 16.0):
+    def __init__(self, orig_linear: nn.Linear, r: int = 8, alpha: float = 8.0):
         super().__init__()
         self.linear = orig_linear
         for p in self.linear.parameters():
@@ -55,7 +55,8 @@ class LoRALinear(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x shape: (..., in_features)
         # base output
-        base = F.linear(x, self.linear.weight, self.linear.bias)
+        # base = F.linear(x, self.linear.weight, self.linear.bias)
+        base = self.linear(x)
 
         if self.r <= 0:
             return base
@@ -71,7 +72,7 @@ class LoRALinear(nn.Module):
         return base + delta
 
     @classmethod
-    def from_linear(cls, linear: nn.Linear, r: int = 4, alpha: float = 16.0):
+    def from_linear(cls, linear: nn.Linear, r: int = 8, alpha: float = 8.0):
         return cls(linear, r=r, alpha=alpha)
     # LoRA hyperparams (you can tweak)
 
@@ -80,12 +81,14 @@ class LoRa(nn.Module):
     """
     An implementation of LoRa, a wrapper around PEFT
     - model: a huggingface decoder model
+    - word_embeddings: it's word_embedding matrix from model.get_input_embeddings
+    - tokenizer: the tokenizer to be used
     - path_to_model: if passed, loads a saved softprompt model instead of initializing one
     - r: lora rank
     - alpha: lora alpha
 
     """
-    def __init__(self, model=None, r=16, alpha=16, path_to_model=None):
+    def __init__(self, model=None, tokenizer=None, word_embeddings=None, r=8, alpha=8, path_to_model=None):
         # Helper to replace modules in-place by name
         def replace_linear_with_lora(model: nn.Module, r: int, alpha: float):
             """
@@ -142,7 +145,12 @@ class LoRa(nn.Module):
 
         super().__init__()
 
+        object.__setattr__(self, "_tokenizer", tokenizer)
         object.__setattr__(self, "_model", model)
+        object.__setattr__(self, "_word_embeddings", word_embeddings)
+
+        for param in model.parameters():
+            param.requires_grad = False
 
         replace_linear_with_lora(model, r=r, alpha=alpha)
         if path_to_model is not None:
@@ -152,8 +160,7 @@ class LoRa(nn.Module):
         model = self._model
         device = self._model.device
 
-        checkpoint = torch.load(path, map_location="cpu")
-        lora_adapters = checkpoint["lora_adapters"]
+        lora_adapters = torch.load(path, map_location="cpu")
 
         name_to_module = dict(model.named_modules())
 
@@ -210,11 +217,12 @@ class LoRa(nn.Module):
         """
         with torch.no_grad():
             if embeds is not None:
+                full_embs = embeds
                 if suffix_str:
                     ids = self._tokenizer(suffix_str, return_tensors="pt").input_ids.to(self._model.device)
                     suffix_embs = self._word_embeddings(ids).to(dtype=self._model.dtype)
-                    full_embs = torch.cat([embeds, suffix_embs], dim=1)
-                attention_mask = torch.ones(embeds.size()[:-1], device=full_embs.device, dtype=torch.long)
+                    full_embs = torch.cat([full_embs, suffix_embs], dim=1)
+                attention_mask = torch.ones(full_embs.size()[:-1], device=full_embs.device, dtype=torch.long)
                 output_ids = self._model.generate(
                     inputs_embeds=full_embs,
                     attention_mask=attention_mask,
@@ -241,6 +249,35 @@ class LoRa(nn.Module):
             output_ids, skip_special_tokens=True
         )
         return output
+    
+    def loss_fn(self, input_embeds, labels, return_entropy=False):
+        outputs = self._model(
+            inputs_embeds=input_embeds,
+            attention_mask=None,   # fully causal
+            labels=labels          # HF computes CE internally
+        )
+
+        if not return_entropy:
+            return outputs.loss
+
+        # logits: [B, T, V]
+        logits = outputs.logits
+
+        # log p(y_t | ...)
+        log_probs = F.log_softmax(logits, dim=-1)
+        probs = log_probs.exp()
+
+        # entropy per token: [B, T]
+        token_entropy = -(probs * log_probs).sum(dim=-1)
+
+        # mask out ignored labels (-100)
+        valid_mask = (labels != -100)
+
+        # mean entropy over valid tokens
+        entropy = (token_entropy * valid_mask).sum() / valid_mask.sum()
+
+        return outputs.loss, entropy    
+
 
     def gen_without_lora(self, embeds=None,max_new_tokens=20, do_sample=True, suffix_str=None):
         with disable_lora(self._model):

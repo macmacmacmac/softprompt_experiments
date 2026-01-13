@@ -13,9 +13,7 @@ from softprompt_experiments.models.lora import LoRa
 
 from softprompt_experiments.utils import (
     get_train_test_from_tokenized, 
-    train_softprompt_from_tokenized,
-    eval_softprompt,
-    eval_softprompt_regression,
+    train_lora_from_tokenized,
     eval_lora_regression,
     log_json
 )
@@ -42,9 +40,9 @@ def run(args_list):
     SAVE_DIR = args.save_directory
     LR = args.lr
     EPOCHS = args.epochs
-    NUM_TOKENS = args.num_tokens
     BATCH_SIZE = args.batch_size
-    SEED = args.seed
+    alpha = args.alpha
+    r = args.r
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
@@ -81,10 +79,14 @@ def run(args_list):
 
         lora = LoRa(
             model=model,
+            tokenizer=tokenizer,
+            word_embeddings=word_embeddings,
+            r=args.r,
+            alpha=args.alpha
         )
         
         # begin training
-        train_loss, test_loss = train_softprompt_from_tokenized(lora, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
+        train_loss, test_loss, entropy = train_lora_from_tokenized(lora, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
 
         hardprompt = torch.load(
             os.path.join(dataset_dir,'dataset.pt'),
@@ -93,22 +95,24 @@ def run(args_list):
 
         # if verbose: generate sample output predictions using eval_softprompt
         if args.verbose:
-            outputs = eval_softprompt_regression(lora, test_dataset, dataset_dir)
+            outputs = eval_lora_regression(lora, test_dataset, dataset_dir)
             print(outputs)
             performance = {
                 'hardprompt':hardprompt,
                 'train loss':train_loss,
                 'test_loss':test_loss,
-                'outputs': outputs
+                'outputs': outputs,
+                'entropy':entropy,
             }
-            log_json(os.path.join('softprompt_performance.json'), performance)
+            log_json(os.path.join(dataset_dir,'lora_performance.json'), performance)
         else:
             performance = {
                 'hardprompt':hardprompt,
                 'train loss':train_loss,
                 'test_loss':test_loss,
+                'entropy':entropy
             }
-            log_json(os.path.join('softprompt_performance.json'), performance)
+            log_json(os.path.join(dataset_dir,'lora_performance.json'), performance)
 
         lora.save_lora(dataset_dir)
 
