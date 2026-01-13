@@ -66,13 +66,33 @@ class SoftPrompt(nn.Module):
     def forward(self):
         return self.prompt_embeddings.unsqueeze(0)  # [1, num_tokens, embed_dim]
 
-    def loss_fn(self, input_embeds, labels):
+    def loss_fn(self, input_embeds, labels, return_entropy=False):
         outputs = self._model(
             inputs_embeds=input_embeds,
-            attention_mask=None,    # attention is fully allowed
-            labels=labels   # HF automatically computes CE
+            attention_mask=None,   # fully causal
+            labels=labels          # HF computes CE internally
         )
-        return outputs.loss
+
+        if not return_entropy:
+            return outputs.loss
+
+        # logits: [B, T, V]
+        logits = outputs.logits
+
+        # log p(y_t | ...)
+        log_probs = F.log_softmax(logits, dim=-1)
+        probs = log_probs.exp()
+
+        # entropy per token: [B, T]
+        token_entropy = -(probs * log_probs).sum(dim=-1)
+
+        # mask out ignored labels (-100)
+        valid_mask = (labels != -100)
+
+        # mean entropy over valid tokens
+        entropy = (token_entropy * valid_mask).sum() / valid_mask.sum()
+
+        return outputs.loss, entropy    
     
     def generate_from_embeds(self, embeds=None, max_new_tokens=20, do_sample=True, suffix_str=None):
         """

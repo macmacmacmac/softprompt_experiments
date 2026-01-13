@@ -117,7 +117,8 @@ def run(args_list):
 
         triples = set()
 
-        high = 10 if num_vars > 2 else 100
+        # high = 10 if num_vars > 2 else 100
+        high = 100
 
         while len(triples) < num_samples:
             triple = (
