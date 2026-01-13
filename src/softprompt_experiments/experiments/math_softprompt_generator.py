@@ -102,7 +102,7 @@ def run(args_list):
         )
         
         # begin training
-        train_loss, test_loss, parsability = train_softprompt_from_tokenized(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
+        train_loss, test_loss, entropy = train_softprompt_from_tokenized(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
 
         hardprompt = torch.load(
             os.path.join(dataset_dir,'dataset.pt'),
@@ -117,19 +117,18 @@ def run(args_list):
                 'hardprompt':hardprompt,
                 'train loss':train_loss,
                 'test_loss':test_loss,
-                'parsability':parsability,
+                'entropy':entropy,
                 'outputs': outputs
             }
-            log_json(os.path.join('softprompt_performance.json'), performance)
+            log_json(os.path.join(dataset_dir,'softprompt_performance.json'), performance)
         else:
-            parsability = softprompt.get_parsability().item()
             performance = {
                 'hardprompt':hardprompt,
                 'train loss':train_loss,
                 'test_loss':test_loss,
-                'parsability':parsability,
+                'entropy':entropy,
             }
-            log_json(os.path.join('softprompt_performance.json'), performance)
+            log_json(os.path.join(dataset_dir,'softprompt_performance.json'), performance)
 
         softprompt.save_softprompt(dataset_dir)
 

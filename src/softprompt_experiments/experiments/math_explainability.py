@@ -16,6 +16,8 @@ from softprompt_experiments.utils import (
     log_json
 )
 
+import json
+
 def run(args_list):
     exp_name = os.path.basename(__file__)
     print(
@@ -156,6 +158,13 @@ def run(args_list):
         results['verbalization_baseline'] = base_generations
 
         log_json(os.path.join(dataset_dir, "explanations.json"), results)
+
+
+        with open(os.path.join(dataset_dir,'softprompt_performance.json')) as f:
+            soft_perf = json.load(f)
+        for key in results:
+            soft_perf[key] = results[key]
+        log_json(os.path.join(dataset_dir, "softprompt_performance.json"), soft_perf)
 
         # print("\n\n\n")
         # print("=====SOFTPROMPT ELICITED DESCRIPTION (CONDITIONED)======\n\n")

@@ -480,6 +480,134 @@ def train_softprompt_from_tokenized(
 
     final_train_loss = 0.0
     final_test_loss = 0.0
+    for epoch in range(epochs):
+        softprompt.train()
+        train_loss = 0.0
+
+        for batch in train_loader:
+            input_ids, labels = [b.to(device) for b in batch]
+            batchsize = input_ids.size(0)
+            # softprompt embeddings
+            sp_embeds = softprompt.forward()   # [1, soft_len, dim]
+            sp_embeds = sp_embeds.expand(batchsize, -1, -1) #[batchsize, soft_len, dim]
+            input_embeds = word_embeddings(input_ids).to(dtype=dtype)
+            full_embeds = torch.cat([sp_embeds, input_embeds], dim=1)
+
+            # Shift labels to align with concatenated softprompt
+            pad_prefix = torch.full(
+                (labels.shape[0], sp_embeds.shape[1]),
+                -100,
+                dtype=labels.dtype,
+                device=device
+            )
+            labels_adjusted = torch.cat([pad_prefix, labels], dim=1)
+
+            # HF autoregressive LM loss
+            loss = softprompt.loss_fn(full_embeds, labels_adjusted)
+
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            train_loss += loss.item()
+
+        # ---- evaluation ----
+        softprompt.eval()
+        test_loss = 0.0
+        if verbose:
+            with torch.no_grad():
+                entropy = []
+                for batch in test_loader:
+                    input_ids, labels = [b.to(device) for b in batch]
+                    batchsize = input_ids.size(0)
+                    # softprompt embeddings
+                    sp_embeds = softprompt.forward()   # [1, soft_len, dim]
+                    sp_embeds = sp_embeds.expand(batchsize, -1, -1)
+                    input_embeds = word_embeddings(input_ids).to(dtype=dtype)  #
+                    full_embeds = torch.cat([sp_embeds, input_embeds], dim=1)
+
+                    # Shift labels to align with concatenated softprompt
+                    pad_prefix = torch.full(
+                        (labels.shape[0], sp_embeds.shape[1]),
+                        -100,
+                        dtype=labels.dtype,
+                        device=device
+                    )
+                    labels_adjusted = torch.cat([pad_prefix, labels], dim=1)
+
+                    loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, return_entropy=True)
+                    test_loss += loss.item()
+                    entropy.append(batch_entropy.item())
+                entropy = sum(entropy)/len(entropy)
+                final_train_loss = train_loss/len(train_loader)
+                final_test_loss = test_loss/len(test_loader)        
+                print(
+                    f"Epoch {epoch+1}/{epochs} | "
+                    f"Train Loss: {final_train_loss:.4f} | "
+                    f"Test Loss: {final_test_loss:.4f} | "
+                    f"Entropy: {entropy}"
+                )
+    with torch.no_grad():
+        entropy = []
+        for batch in test_loader:
+            input_ids, labels = [b.to(device) for b in batch]
+            batchsize = input_ids.size(0)
+            # softprompt embeddings
+            sp_embeds = softprompt.forward()   # [1, soft_len, dim]
+            sp_embeds = sp_embeds.expand(batchsize, -1, -1)
+            input_embeds = word_embeddings(input_ids).to(dtype=dtype)  #
+            full_embeds = torch.cat([sp_embeds, input_embeds], dim=1)
+
+            # Shift labels to align with concatenated softprompt
+            pad_prefix = torch.full(
+                (labels.shape[0], sp_embeds.shape[1]),
+                -100,
+                dtype=labels.dtype,
+                device=device
+            )
+            labels_adjusted = torch.cat([pad_prefix, labels], dim=1)
+
+            loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, return_entropy=True)
+            test_loss += loss.item()
+            entropy.append(batch_entropy.item())
+        entropy = sum(entropy)/len(entropy)
+        final_train_loss = train_loss/len(train_loader)
+        final_test_loss = test_loss/len(test_loader)        
+
+    return final_train_loss, final_test_loss, entropy
+
+def train_lora_from_tokenized(
+    softprompt: SoftPrompt,
+    lr: float,
+    epochs: int,
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    verbose: bool = False,
+):
+    """
+    Trains a lora finetuned model from a dataset of tokenized sequences
+    
+    lora: instance of softprompt_experiments.models.lora
+    lr: learning rate
+    epochs: number of epochs to train
+    verbose: whether to print losses after each epoch
+    """
+
+    model = softprompt._model
+    tokenizer = softprompt._tokenizer
+    word_embeddings = softprompt._word_embeddings
+    dtype = model.dtype
+    device = model.device
+
+    # Freeze LM
+    model.requires_grad_(False)
+    softprompt.to(device)
+
+    # Only train the softprompt parameters
+    optimizer = torch.optim.AdamW(softprompt.parameters(), lr=lr)
+
+    final_train_loss = 0.0
+    final_test_loss = 0.0
     parsability = 0.0
     for epoch in range(epochs):
         softprompt.train()
