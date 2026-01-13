@@ -16,6 +16,7 @@ from softprompt_experiments.utils import (
     train_softprompt_from_tokenized,
     eval_softprompt,
     eval_softprompt_regression,
+    eval_lora_regression,
     log_json
 )
 
@@ -78,23 +79,12 @@ def run(args_list):
             train_portion = 0.8
         )
 
-        # initialize softprompt
-        lora_config = LoraConfig(
-            r=args.r,
-            lora_alpha=args.alpha,
-            target_modules=["q_proj", "v_proj"],
-            lora_dropout=0.05,
-            bias="none",
-            task_type=TaskType.CAUSAL_LM
-        )
-
         lora = LoRa(
             model=model,
-            lora_config=lora_config
         )
         
         # begin training
-        train_loss, test_loss, parsability = train_softprompt_from_tokenized(softprompt, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
+        train_loss, test_loss = train_softprompt_from_tokenized(lora, LR, EPOCHS, train_loader, test_loader, verbose=args.verbose)
 
         hardprompt = torch.load(
             os.path.join(dataset_dir,'dataset.pt'),
@@ -103,27 +93,24 @@ def run(args_list):
 
         # if verbose: generate sample output predictions using eval_softprompt
         if args.verbose:
-            outputs = eval_softprompt_regression(softprompt, test_dataset, dataset_dir)
+            outputs = eval_softprompt_regression(lora, test_dataset, dataset_dir)
             print(outputs)
             performance = {
                 'hardprompt':hardprompt,
                 'train loss':train_loss,
                 'test_loss':test_loss,
-                'parsability':parsability,
                 'outputs': outputs
             }
             log_json(os.path.join('softprompt_performance.json'), performance)
         else:
-            parsability = softprompt.get_parsability().item()
             performance = {
                 'hardprompt':hardprompt,
                 'train loss':train_loss,
                 'test_loss':test_loss,
-                'parsability':parsability,
             }
             log_json(os.path.join('softprompt_performance.json'), performance)
 
-        softprompt.save_softprompt(dataset_dir)
+        lora.save_lora(dataset_dir)
 
     print(
         "\n","="*100, "\n", 

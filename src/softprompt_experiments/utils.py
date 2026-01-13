@@ -17,6 +17,8 @@ from transformers import (
 
 from softprompt_experiments.models.softprompt import SoftPrompt
 from softprompt_experiments.models.squishyprompt import SquishyPrompt
+from softprompt_experiments.models.lora import LoRa
+
 
 import json
 
@@ -571,6 +573,108 @@ def train_softprompt_from_tokenized(
 
     return final_train_loss, final_test_loss, parsability
 
+def train_lora_from_tokenized(
+    lora: LoRa,
+    lr: float,
+    epochs: int,
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    verbose: bool = False,
+):
+    """
+    Trains a softprompt from a dataset of tokenized sequences
+    
+    lora: instance of softprompt_experiments.models.LoRa
+    lr: learning rate
+    epochs: number of epochs to train
+    verbose: whether to print losses after each epoch
+    """
+
+    model = lora._model
+    tokenizer = lora._tokenizer
+    word_embeddings = lora._word_embeddings
+    dtype = model.dtype
+    device = model.device
+
+    # Freeze LM
+    for param in model.parameters():
+        param.requires_grad = False
+    model.requires_grad_(False)
+    lora.to(device)
+
+    # Only train the lora parameters
+    lora_parameters = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(lora_parameters, lr=lr)
+
+    final_train_loss = 0.0
+    final_test_loss = 0.0
+    parsability = 0.0
+    for epoch in range(epochs):
+        lora.train()
+        train_loss = 0.0
+
+        for batch in train_loader:
+            input_ids, labels = [b.to(device) for b in batch]
+            batchsize = input_ids.size(0)
+            input_embeds = word_embeddings(input_ids).to(dtype=dtype)
+            full_embeds = input_embeds
+
+            # HF autoregressive LM loss
+            outputs = model(inputs_embeds=full_embeds, labels=labels)
+
+            # outputs = model(inputs_embeds=input_embeds, labels=labels)
+
+            loss = outputs.loss
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            train_loss += loss.item()
+
+        # ---- evaluation ----
+        model.eval()
+        test_loss = 0.0
+        if verbose:
+            with torch.no_grad():
+                for batch in test_loader:
+                    input_ids, labels = [b.to(device) for b in batch]
+                    batchsize = input_ids.size(0)
+                    input_embeds = word_embeddings(input_ids).to(dtype=dtype)
+                    full_embeds = input_embeds
+
+                    # HF autoregressive LM loss
+                    outputs = model(inputs_embeds=full_embeds, labels=labels)
+
+                    # outputs = model(inputs_embeds=input_embeds, labels=labels)
+
+                    loss = outputs.loss
+                    test_loss += loss.item()
+                final_train_loss = train_loss/len(train_loader)
+                final_test_loss = test_loss/len(test_loader)        
+                print(
+                    f"Epoch {epoch+1}/{epochs} | "
+                    f"Train Loss: {final_train_loss:.4f} | "
+                    f"Test Loss: {final_test_loss:.4f} | "
+                )
+    with torch.no_grad():
+        for batch in test_loader:
+            input_ids, labels = [b.to(device) for b in batch]
+            batchsize = input_ids.size(0)
+            input_embeds = word_embeddings(input_ids).to(dtype=dtype)
+            full_embeds = input_embeds
+
+            # HF autoregressive LM loss
+            outputs = model(inputs_embeds=full_embeds, labels=labels)
+
+            # outputs = model(inputs_embeds=input_embeds, labels=labels)
+
+            loss = outputs.loss
+            test_loss += loss.item()
+        final_train_loss = train_loss/len(train_loader)
+        final_test_loss = test_loss/len(test_loader)        
+
+    return final_train_loss, final_test_loss
+
 def eval_softprompt(softprompt: SoftPrompt, test_dataset: TensorDataset):
     """
     Passes test dataset input sequences into the softprompt 
@@ -759,6 +863,139 @@ def eval_softprompt_regression(softprompt, test_dataset, fig_dir=None, return_ra
     if return_raw:
         return metrics, raw_records
     return metrics
+
+def eval_lora_regression(lora, test_dataset, fig_dir=None, return_raw=False):
+    """
+    Evaluates a lora on a test set containing integer regression targets.
+
+    Arguments:
+        lora: instance of LoRa
+        test_dataset: TensorDataset(input_ids, labels)
+        return_raw: whether to additionally return raw {input, target, pred} records
+
+    Returns:
+        metrics = {
+            "mse": float,
+            "mae": float,
+            "pearson_r": float,
+            "pearson_p": float
+        }
+        (optionally) raw_records = [...]
+    """
+    model = lora._model
+    tokenizer = lora._tokenizer
+    word_embeddings = lora._word_embeddings
+    dtype = model.dtype
+    device = model.device
+
+    preds = []
+    targets = []
+    raw_records = []
+
+    for full_ids, labels in test_dataset:
+        full_ids = full_ids.to(device)
+        labels = labels.to(device)
+
+        # Identify input and target segments
+        input_mask = (labels == -100)
+        target_mask = (labels != -100)
+
+        # Extract input-only ids for generation
+        only_input_ids = full_ids[input_mask].unsqueeze(0)   # shape [1, seq_len_in]
+        target_ids = full_ids[target_mask]
+
+        # Decode true target text and parse integer
+        true_text = tokenizer.decode(target_ids, skip_special_tokens=True)
+        true_val = parse_first_number(true_text)
+
+        if true_val is None:
+            # If dataset is correct this should never happen
+            continue
+
+        # Generate model output
+        max_new_tokens = len(target_ids)
+        input_embeds = word_embeddings(only_input_ids).to(dtype=dtype)
+
+        generated_text = lora.generate_from_embeds(
+            input_embeds,
+            max_new_tokens=max_new_tokens
+        )[0]
+
+        pred_val = parse_first_number(generated_text)
+
+        # If model outputs no number, skip or set to 0; we choose skip
+        if pred_val is None:
+            continue
+
+        preds.append(pred_val)
+        targets.append(true_val)
+
+        if return_raw:
+            raw_records.append({
+                "input": tokenizer.decode(only_input_ids[0], skip_special_tokens=True),
+                "target": true_val,
+                "pred": pred_val,
+                "raw_generated": generated_text,
+            })
+
+    # Convert to numpy
+    preds = np.array(preds)
+    targets = np.array(targets)
+
+    # Compute metrics
+    mse = np.mean((preds - targets)**2)
+    mae = np.mean(np.abs(preds - targets))
+    if len(preds) > 1:
+        r, p = pearsonr(preds, targets)
+    else:
+        r, p = float("nan"), float("nan")
+
+    metrics = {
+        "mse": mse,
+        "mae": mae,
+        "pearson_r": r,
+        "pearson_p": p,
+    }
+    if fig_dir:
+        os.makedirs(fig_dir, exist_ok=True)
+        fig_path = os.path.join(fig_dir, "targets_vs_preds.png")
+
+        plt.figure()
+        plt.scatter(targets, preds, alpha=0.6)
+        plt.xlabel("Targets")
+        plt.ylabel("Predictions")
+        plt.title("Targets vs Predictions")
+
+        # y = x reference line
+        min_val = min(targets.min(), preds.min())
+        max_val = max(targets.max(), preds.max())
+        plt.plot([min_val, max_val], [min_val, max_val], linestyle="--")
+
+        # Metrics text box
+        metrics_text = (
+            f"MSE: {mse:.4g}\n"
+            f"MAE: {mae:.4g}\n"
+            f"Pearson r: {r:.4f}\n"
+            f"Pearson p: {p:.2e}"
+        )
+
+        plt.gca().text(
+            0.05,
+            0.95,
+            metrics_text,
+            transform=plt.gca().transAxes,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", alpha=0.8)
+        )
+
+        plt.tight_layout()
+        plt.savefig(fig_path, dpi=300)
+        plt.close()
+
+    if return_raw:
+        return metrics, raw_records
+    return metrics
+
 
 import numpy as np
 from collections import Counter
