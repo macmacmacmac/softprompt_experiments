@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn import Embedding
 from torch.utils.data import TensorDataset, DataLoader, random_split
 import copy
@@ -503,7 +504,8 @@ def train_softprompt_from_tokenized(
             labels_adjusted = torch.cat([pad_prefix, labels], dim=1)
 
             # HF autoregressive LM loss
-            loss = softprompt.loss_fn(full_embeds, labels_adjusted)
+            loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, return_entropy=True)
+            loss = loss #+ 0.0*F.relu(1.0 - batch_entropy)
 
             loss.backward()
             optimizer.step()

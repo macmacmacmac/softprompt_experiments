@@ -11,8 +11,6 @@ from softprompt_experiments.models.softprompt import SoftPrompt
 from softprompt_experiments.models.squishyprompt import SquishyPrompt
 from softprompt_experiments.utils import (
     get_train_test_from_tokenized, 
-    train_softprompt_from_tokenized,
-    eval_softprompt,
     log_json
 )
 
@@ -68,6 +66,12 @@ def run(args_list):
             BATCH_SIZE,
             train_portion = 0.8
         )
+        with open(os.path.join(dataset_dir,'softprompt_performance.json')) as f:
+            soft_perf = json.load(f)
+
+        entropy = soft_perf['entropy']
+        pearson_r = soft_perf['outputs']['pearson_r']
+
         hardprompt = torch.load(
             os.path.join(dataset_dir,'dataset.pt'),
             weights_only=False
@@ -82,6 +86,8 @@ def run(args_list):
         results = {}
         results['hardprompt'] = hardprompt
         print(f"\n--------------------------Actual hardprompt: {hardprompt}--------------------------\n")
+        print(f"|=== Entropy: {entropy}")
+        print(f"|=== Pearson R: {pearson_r}")
         random_idxs = torch.randint(0, len(test_dataset), (args.num_samples,))
 
         #just softprompt
@@ -160,8 +166,6 @@ def run(args_list):
         log_json(os.path.join(dataset_dir, "explanations.json"), results)
 
 
-        with open(os.path.join(dataset_dir,'softprompt_performance.json')) as f:
-            soft_perf = json.load(f)
         for key in results:
             soft_perf[key] = results[key]
         log_json(os.path.join(dataset_dir, "softprompt_performance.json"), soft_perf)
