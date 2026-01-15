@@ -24,6 +24,7 @@ from softprompt_experiments.models.lora import LoRa
 import json
 
 import matplotlib.pyplot as plt
+from sklearn.metrics import precision_recall_fscore_support
 
 def log_json(save_dir, data):
     with open(save_dir, 'w') as f:
@@ -39,7 +40,7 @@ def tokenize_and_save(
     
     full_sentences = [f"{inp_sent}{targt_sent}" for inp_sent, targt_sent in zip(input_sentences, target_sentences)]
 
-    tokenized_inp = tokenizer(input_sentences, add_special_tokens=False, return_tensors='pt')
+    tokenized_inp = tokenizer(input_sentences, add_special_tokens=False)
     tokenized_full = tokenizer(full_sentences, padding='longest', return_tensors='pt')
 
     label_masks = []
@@ -101,6 +102,95 @@ def get_train_test_from_tokenized(tokenized_dataset_dir: str, batchsize: int, tr
     test_loader = DataLoader(test_dataset, batch_size=batchsize, shuffle=False)
 
     return train_dataset, test_dataset, train_loader, test_loader
+
+def batched_tokenize_and_save(
+    input_sentences,
+    target_sentences,
+    save_dir,
+    hardprompt,
+    tokenizer,
+    batch_size=512,
+    input_max_length=128,
+    target_max_length=8
+):
+    """
+    Tokenize inputs and targets, truncate only the input part,
+    and concatenate with full target. Pads batches to the longest
+    concatenated sequence in each batch.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    all_input_ids = []
+    all_attention_masks = []
+    all_labels = []
+
+    for start in range(0, len(input_sentences), batch_size):
+        end = start + batch_size
+
+        inp_batch = input_sentences[start:end]
+        tgt_batch = target_sentences[start:end]
+
+        batch_input_ids = []
+        batch_labels = []
+
+        # Step 1: tokenize input only, truncate to max_length
+        inp_tok = tokenizer(
+            inp_batch,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=input_max_length
+        )
+
+        # Step 2: tokenize target separately, no truncation
+        tgt_tok = tokenizer(
+            tgt_batch,
+            padding='max_length',
+            truncation=True,
+            max_length=target_max_length
+        )
+
+        # Step 3: concatenate input + target IDs manually
+        for i in range(len(inp_batch)):
+            input_ids = inp_tok["input_ids"][i]
+            target_ids = tgt_tok["input_ids"][i]
+
+            full_ids = input_ids + target_ids
+            labels = [-100] * len(input_ids) + target_ids  # mask input, supervise target
+
+            batch_input_ids.append(full_ids)
+            batch_labels.append(labels)
+
+        # Step 4: pad batch to the longest sequence in this batch
+        batch_max_len = max(len(ids) for ids in batch_input_ids)
+        padded_input_ids = []
+        padded_attention_masks = []
+        padded_labels = []
+
+        for ids, lbls in zip(batch_input_ids, batch_labels):
+            pad_len = batch_max_len - len(ids)
+            padded_input_ids.append(ids + [tokenizer.pad_token_id] * pad_len)
+            padded_attention_masks.append([1] * len(ids) + [0] * pad_len)
+            padded_labels.append(lbls + [-100] * pad_len)
+
+        # Convert to tensors
+        all_input_ids.append(torch.tensor(padded_input_ids))
+        all_attention_masks.append(torch.tensor(padded_attention_masks))
+        all_labels.append(torch.tensor(padded_labels))
+
+    tokenized_full = {
+        "input_ids": torch.cat(all_input_ids, dim=0),
+        "attention_mask": torch.cat(all_attention_masks, dim=0),
+        "labels": torch.cat(all_labels, dim=0),
+    }
+
+    dataset = {
+        "tokenized_samples": tokenized_full,
+        "hardprompt": hardprompt,
+    }
+
+    torch.save(dataset, os.path.join(save_dir, "dataset.pt"))
+    return dataset
+
 
 def get_train_test_from_softprompt_logits(
     model: AutoModelForCausalLM,
@@ -456,6 +546,7 @@ def train_softprompt_from_tokenized(
     train_loader: DataLoader,
     test_loader: DataLoader,
     verbose: bool = False,
+    verbose_level: str = 'epoch'
 ):
     """
     Trains a softprompt from a dataset of tokenized sequences
@@ -464,6 +555,7 @@ def train_softprompt_from_tokenized(
     lr: learning rate
     epochs: number of epochs to train
     verbose: whether to print losses after each epoch
+    verbose_level: either 'batch' or 'epoch', defaults to epoch
     """
 
     model = softprompt._model
@@ -484,8 +576,7 @@ def train_softprompt_from_tokenized(
     for epoch in range(epochs):
         softprompt.train()
         train_loss = 0.0
-
-        for batch in train_loader:
+        for i, batch in enumerate(tqdm(train_loader) if verbose_level=='batch' else train_loader):
             input_ids, labels = [b.to(device) for b in batch]
             batchsize = input_ids.size(0)
             # softprompt embeddings
@@ -505,14 +596,16 @@ def train_softprompt_from_tokenized(
 
             # HF autoregressive LM loss
             loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, return_entropy=True)
-            loss = loss #+ 0.0*F.relu(1.0 - batch_entropy)
+            loss = loss + 0.1*F.relu(1.0 - batch_entropy)
 
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
 
             train_loss += loss.item()
-
+            if i%36 == 0:
+                print(f"Batch:{i}, train_loss: {loss}")
+            
         # ---- evaluation ----
         softprompt.eval()
         test_loss = 0.0
@@ -867,6 +960,135 @@ def eval_softprompt_regression(softprompt, test_dataset, fig_dir=None, return_ra
     if return_raw:
         return metrics, raw_records
     return metrics
+
+def parse_class_label(text, class_labels, default=None):
+    """
+    Extracts the first word from text that matches an allowed class label.
+
+    Args:
+        text (str): generated text or target text
+        class_labels (List[str]): list of allowed class labels (strings)
+        default: fallback in case un parsable
+
+    Returns:
+        str or None: the first matching label, or None if no match
+    """
+    text_words = text.strip().split()  # split on whitespace
+    class_labels_lower = [lbl.lower() for lbl in class_labels]
+
+    for word in text_words:
+        if word.lower() in class_labels_lower:
+            # return the original label casing
+            return class_labels[class_labels_lower.index(word.lower())]
+
+    return default
+
+def eval_softprompt_classification(
+    softprompt,
+    test_dataset,
+    class_labels,
+    return_raw=False,
+    default=None
+):
+    """
+    Evaluates a softprompt on a classification task via generation.
+
+    Arguments:
+        softprompt: instance of SoftPrompt
+        test_dataset: iterable of (input_ids, labels)
+        class_labels: list of allowed class labels (strings)
+        fig_dir: optional directory to save confusion matrix
+        return_raw: whether to return raw {input, target, pred} records
+
+    Returns:
+        metrics = {
+            "accuracy": float,
+            "macro_f1": float,
+            "precision": float,
+            "recall": float,
+        }
+        (optionally) raw_records = [...]
+    """
+    model = softprompt._model
+    tokenizer = softprompt._tokenizer
+    word_embeddings = softprompt._word_embeddings
+    dtype = model.dtype
+    device = model.device
+
+    preds = []
+    targets = []
+    raw_records = []
+
+    label_to_id = {lbl: i for i, lbl in enumerate(class_labels)}
+    id_to_label = {i: lbl for lbl, i in label_to_id.items()}
+
+    for full_ids, labels in tqdm(test_dataset):
+        full_ids = full_ids.to(device)
+        labels = labels.to(device)
+
+        # Identify input vs target tokens
+        input_mask = (labels == -100)
+        target_mask = (labels != -100)
+
+        only_input_ids = full_ids[input_mask].unsqueeze(0)
+        target_ids = full_ids[target_mask]
+
+        # Decode true target label
+        true_text = tokenizer.decode(target_ids, skip_special_tokens=True).strip()
+        true_label = parse_class_label(true_text, class_labels)
+
+        if true_label is None:
+            continue
+
+        # Generate prediction
+        max_new_tokens = len(target_ids)
+        input_embeds = word_embeddings(only_input_ids).to(dtype=dtype)
+
+        generated_text = softprompt.generate_from_embeds(
+            input_embeds,
+            max_new_tokens=max_new_tokens
+        )[0]
+
+        pred_label = parse_class_label(generated_text, class_labels, default=default)
+
+        if pred_label is None:
+            continue
+
+        preds.append(label_to_id[pred_label])
+        targets.append(label_to_id[true_label])
+
+        if return_raw:
+            raw_records.append({
+                "input": tokenizer.decode(only_input_ids[0], skip_special_tokens=True),
+                "target": true_label,
+                "pred": pred_label,
+                "raw_generated": generated_text,
+            })
+
+    preds = np.array(preds)
+    targets = np.array(targets)
+
+    # Metrics
+    accuracy = (preds == targets).mean()
+
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        targets,
+        preds,
+        average="macro",
+        zero_division=0,
+    )
+
+    metrics = {
+        "accuracy": accuracy,
+        "macro_f1": f1,
+        "precision": precision,
+        "recall": recall,
+    }
+
+    if return_raw:
+        return metrics, raw_records
+    return metrics
+
 
 def eval_lora_regression(lora, test_dataset, fig_dir=None, return_raw=False):
     """

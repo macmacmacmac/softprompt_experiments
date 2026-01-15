@@ -16,6 +16,7 @@ from softprompt_experiments.utils import (
     train_softprompt_from_tokenized,
     eval_softprompt,
     eval_softprompt_regression,
+    eval_softprompt_classification,
     log_json
 )
 
@@ -37,7 +38,7 @@ def run(args_list):
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--verbose", type=bool, default=False)
-    parser.add_argument("--verbose_level", type=str, default='jonathan')
+    parser.add_argument("--verbose_level", type=str, default='epoch')
     args, _ = parser.parse_known_args(args_list)
     
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
@@ -103,10 +104,10 @@ def run(args_list):
         )
         
         # begin training
-        # train_loss, test_loss, entropy = train_softprompt_from_tokenized(
-        #     softprompt, LR, EPOCHS, train_loader, test_loader, 
-        #     verbose=args.verbose, verbose_level=args.verbose_level
-        # )
+        train_loss, test_loss, entropy = train_softprompt_from_tokenized(
+            softprompt, LR, EPOCHS, train_loader, test_loader, 
+            verbose=args.verbose, verbose_level=args.verbose_level
+        )
 
         hardprompt = torch.load(
             os.path.join(dataset_dir,'dataset.pt'),
@@ -115,7 +116,7 @@ def run(args_list):
 
         # if verbose: generate sample output predictions using eval_softprompt
         if args.verbose:
-            outputs = eval_softprompt_regression(softprompt, test_dataset, dataset_dir)
+            outputs = eval_softprompt_classification(softprompt, test_dataset, ["human", "ai"], default="human")
             print(outputs)
             performance = {
                 'hardprompt':hardprompt,

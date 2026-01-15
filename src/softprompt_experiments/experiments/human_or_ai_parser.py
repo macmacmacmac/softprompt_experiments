@@ -9,7 +9,7 @@ from transformers import (
 )
 from tqdm.auto import tqdm
 
-from softprompt_experiments.utils import tokenize_and_save
+from softprompt_experiments.utils import tokenize_and_save, batched_tokenize_and_save
 import pandas as pd
 
 def run(args_list):
@@ -37,13 +37,16 @@ def run(args_list):
 
     df = pd.read_csv("./datasets/human_or_ai_dataset/human_or_ai_dataset.csv")
     
-    input_sentences = [f"\nSample text: {input_sent}\nAI Generated: " for input_sent in df.text.tolist()]
-    target_sentences = [str(target) for target in df.generated.tolist()]
+    input_sentences = [f"\nSample text: {input_sent}\nAnswer: " for input_sent in df.text.tolist()]
+    target_sentences = [('ai' if target==1 else 'human') for target in df.generated.tolist()]
 
-    print(input_sentences[:3])
-    print(target_sentences[:3])
+    # print(input_sentences[:3])
+    # print(target_sentences[:3])
 
-    tokenized = tokenize_and_save(input_sentences, target_sentences, save_dir, "human or ai", tokenizer)
+    tokenized = batched_tokenize_and_save(
+        input_sentences, target_sentences, save_dir, "human or ai", tokenizer, 
+        input_max_length=128, target_max_length=4
+    )
 
         
 
