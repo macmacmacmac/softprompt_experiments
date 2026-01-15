@@ -103,10 +103,10 @@ def run(args_list):
         )
         
         # begin training
-        # train_loss, test_loss, entropy = train_softprompt_from_tokenized(
-        #     softprompt, LR, EPOCHS, train_loader, test_loader, 
-        #     verbose=args.verbose, verbose_level=args.verbose_level
-        # )
+        train_loss, test_loss, entropy = train_softprompt_from_tokenized(
+            softprompt, LR, EPOCHS, train_loader, test_loader, 
+            verbose=args.verbose, verbose_level=args.verbose_level
+        )
 
         hardprompt = torch.load(
             os.path.join(dataset_dir,'dataset.pt'),

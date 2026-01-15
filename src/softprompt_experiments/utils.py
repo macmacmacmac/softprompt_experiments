@@ -105,6 +105,8 @@ def get_train_test_from_tokenized(tokenized_dataset_dir: str, batchsize: int, tr
 
 def batched_tokenize_and_save(
     input_sentences,
+    prefix,
+    suffix,
     target_sentences,
     save_dir,
     hardprompt,
@@ -146,16 +148,22 @@ def batched_tokenize_and_save(
             tgt_batch,
             padding='max_length',
             truncation=True,
+            add_special_tokens=False,
             max_length=target_max_length
         )
+
+        prefix_ids = tokenizer(prefix, add_special_tokens=False)['input_ids']
+        suffix_ids = tokenizer(suffix, add_special_tokens=False)['input_ids']
 
         # Step 3: concatenate input + target IDs manually
         for i in range(len(inp_batch)):
             input_ids = inp_tok["input_ids"][i]
             target_ids = tgt_tok["input_ids"][i]
 
-            full_ids = input_ids + target_ids
-            labels = [-100] * len(input_ids) + target_ids  # mask input, supervise target
+            formatted_input_ids = prefix_ids + input_ids + suffix_ids
+
+            full_ids = formatted_input_ids + target_ids
+            labels = [-100] * len(formatted_input_ids) + target_ids  # mask input, supervise target
 
             batch_input_ids.append(full_ids)
             batch_labels.append(labels)
@@ -596,7 +604,7 @@ def train_softprompt_from_tokenized(
 
             # HF autoregressive LM loss
             loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, return_entropy=True)
-            loss = loss + 0.1*F.relu(1.0 - batch_entropy)
+            loss = loss #+ 0.1*F.relu(2.0 - batch_entropy)
 
             loss.backward()
             optimizer.step()
@@ -604,7 +612,7 @@ def train_softprompt_from_tokenized(
 
             train_loss += loss.item()
             if i%36 == 0:
-                print(f"Batch:{i}, train_loss: {loss}")
+                print(f"Batch:{i}, train_loss: {loss}, entropy: {batch_entropy}")
             
         # ---- evaluation ----
         softprompt.eval()

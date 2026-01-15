@@ -37,18 +37,27 @@ def run(args_list):
 
     df = pd.read_csv("./datasets/human_or_ai_dataset/human_or_ai_dataset.csv")
     
-    input_sentences = [f"\nSample text: {input_sent}\nAnswer: " for input_sent in df.text.tolist()]
+    # input_sentences = [f"\nSample text: {input_sent}\nAnswer: " for input_sent in df.text.tolist()]
+    prefix = "\nSample text:\n\""
+    suffix = "...\"\nAnswer:\n"
     target_sentences = [('ai' if target==1 else 'human') for target in df.generated.tolist()]
 
     # print(input_sentences[:3])
     # print(target_sentences[:3])
 
     tokenized = batched_tokenize_and_save(
-        input_sentences, target_sentences, save_dir, "human or ai", tokenizer, 
-        input_max_length=128, target_max_length=4
+        df.text.tolist(),
+        prefix,
+        suffix, 
+        target_sentences, 
+        save_dir, 
+        "human or ai", 
+        tokenizer, 
+        input_max_length=128, 
+        target_max_length=4
     )
 
-        
+    print(tokenizer.decode(tokenized['tokenized_samples']['input_ids'][0]))
 
     print(
         "\n","="*100, "\n", 

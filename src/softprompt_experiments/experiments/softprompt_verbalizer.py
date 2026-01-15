@@ -29,6 +29,7 @@ def run(args_list):
     parser.add_argument("--num_samples", type=int, default=3)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_physics2")
     parser.add_argument("--max_new_tokens", type=int, default=50)
+    parser.add_argument("--text_or_math", type=str, default="math")
     args, _ = parser.parse_known_args(args_list)
 
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
@@ -70,7 +71,13 @@ def run(args_list):
             soft_perf = json.load(f)
 
         entropy = soft_perf['entropy']
-        pearson_r = soft_perf['outputs']['pearson_r']
+
+        pearson_r = None
+        accuracy = None
+        if "pearson_r" in soft_perf:
+            pearson_r = soft_perf['outputs']['pearson_r']
+        elif "accuracy" in soft_perf:
+            accuracy = soft_perf['outputs']['accuracy']
 
         hardprompt = torch.load(
             os.path.join(dataset_dir,'dataset.pt'),
@@ -87,7 +94,11 @@ def run(args_list):
         results['hardprompt'] = hardprompt
         print(f"\n--------------------------Actual hardprompt: {hardprompt}--------------------------\n")
         print(f"|=== Entropy: {entropy}")
-        print(f"|=== Pearson R: {pearson_r}")
+        if pearson_r is not None:
+            print(f"|=== Pearson R: {pearson_r}")
+        if accuracy is not None:
+            print(f"|=== Accuracy: {accuracy}")
+
         random_idxs = torch.randint(0, len(test_dataset), (args.num_samples,))
 
         #just softprompt
