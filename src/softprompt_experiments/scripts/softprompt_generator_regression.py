@@ -38,22 +38,33 @@ def run(args_list):
     parser.add_argument("--num_tokens", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lambd", type=float, default=1.)
+    parser.add_argument("--no-auto_split",dest="auto_split",action="store_false")
+    parser.set_defaults(auto_split=True)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--verbose", type=bool, default=False)
-    parser.add_argument("--verbose_level", type=str, default='jonathan')
+    parser.add_argument("--verbose", action="store_true", help="enable verbose logging")
+    parser.set_defaults(verbose=False)
+    parser.add_argument("--verbose_level", type=str, default='epoch')
     parser.add_argument("--entropy_reg_constant", type=float, default=0.)
-
+    
     args, _ = parser.parse_known_args(args_list)
     
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     SAVE_DIR = args.save_directory
+    AUTO_SPLIT = args.auto_split
+    VERBOSE = args.verbose
+    VERBOSE_LEVEL = args.verbose_level
+    INIT = args.init
+    ENTROPY_REG_CONSTANT = args.entropy_reg_constant
     LR = args.lr
     EPOCHS = args.epochs
     NUM_TOKENS = args.num_tokens
     BATCH_SIZE = args.batch_size
     LAMBDA = args.lambd
     SEED = args.seed
+
+    print("VERBOSE: ", VERBOSE)
+    print("AUTO_SPLIT: ", AUTO_SPLIT)
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
@@ -85,7 +96,8 @@ def run(args_list):
         train_dataset, test_dataset, train_loader, test_loader = get_train_test_from_tokenized(
             dataset_dir,
             BATCH_SIZE,
-            train_portion = 0.8
+            train_portion = 0.8,
+            auto_split=AUTO_SPLIT
         )
 
         # initialize softprompt
@@ -97,7 +109,7 @@ def run(args_list):
             ).to(model.device)
             init = tokenizer.decode(init_token_ids)
         else:
-            init = args.init
+            init = INIT
         
         # print("Initial tokens: ", init)
         softprompt = SoftPrompt(
@@ -111,8 +123,8 @@ def run(args_list):
         # begin training
         train_loss, test_loss, entropy = train_softprompt_from_tokenized(
             softprompt, LR, EPOCHS, train_loader, test_loader, 
-            verbose=args.verbose, verbose_level=args.verbose_level,
-            entropy_reg_constant=args.entropy_reg_constant
+            verbose=VERBOSE, verbose_level=VERBOSE_LEVEL,
+            entropy_reg_constant=ENTROPY_REG_CONSTANT
         )
 
         hardprompt = torch.load(
@@ -121,7 +133,7 @@ def run(args_list):
         )['hardprompt']
 
         # if verbose: generate sample output predictions using eval_softprompt
-        if args.verbose:
+        if VERBOSE:
             outputs = eval_softprompt_regression(softprompt, test_dataset, dataset_dir)
             print(outputs)
             performance = {
