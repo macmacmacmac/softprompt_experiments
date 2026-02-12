@@ -43,10 +43,11 @@ def run(args_list):
     parser.set_defaults(verbose=False)
     parser.add_argument("--verbose_level", type=str, default='epoch')
     parser.add_argument("--entropy_reg_constant", type=float, default=0.)
-    
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
+
     args, _ = parser.parse_known_args(args_list)
     
-    MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+    MODEL_NAME = args.model_name
     SAVE_DIR = args.save_directory
     AUTO_SPLIT = args.auto_split
     VERBOSE = args.verbose

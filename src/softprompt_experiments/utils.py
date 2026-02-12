@@ -607,10 +607,12 @@ def train_softprompt_from_tokenized(
         softprompt.train()
         train_loss = 0.0
         for i, batch in enumerate(tqdm(train_loader) if verbose_level=='batch' else train_loader):
+            print("I made it inside the training loop")
             input_ids, labels = [b.to(device) for b in batch]
             batchsize = input_ids.size(0)
             # softprompt embeddings
             sp_embeds = softprompt.forward()   # [1, soft_len, dim]
+            print("i managed to get sp_embeds")
             sp_embeds = sp_embeds.expand(batchsize, -1, -1) #[batchsize, soft_len, dim]
             input_embeds = word_embeddings(input_ids).to(dtype=dtype)
             full_embeds = torch.cat([sp_embeds, input_embeds], dim=1)

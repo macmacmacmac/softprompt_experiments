@@ -30,12 +30,13 @@ def run(args_list):
     parser.add_argument("--save_directory", type=str, default="./datasets/math_physics2")
     parser.add_argument("--max_new_tokens", type=int, default=50)
     parser.add_argument("--show_target", type=bool, default=False)
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
     parser.add_argument("--no_auto_split",dest="auto_split",action="store_false")
     parser.set_defaults(auto_split=True)
 
     args, _ = parser.parse_known_args(args_list)
 
-    MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+    MODEL_NAME = args.model_name
     SAVE_DIR = args.save_directory
     BATCH_SIZE = args.batch_size
     AUTO_SPLIT = args.auto_split
@@ -72,17 +73,25 @@ def run(args_list):
             train_portion = 0.8,
             auto_split=AUTO_SPLIT
         )
-        with open(os.path.join(dataset_dir,'softprompt_performance.json')) as f:
-            soft_perf = json.load(f)
 
-        entropy = soft_perf['entropy']
+        has_perf_file = False
+        try:
+            with open(os.path.join(dataset_dir,'softprompt_performance.json')) as f:
+                soft_perf = json.load(f)
+            has_perf_file = True
 
-        pearson_r = None
-        accuracy = None
-        if "pearson_r" in soft_perf:
-            pearson_r = soft_perf['outputs']['pearson_r']
-        elif "accuracy" in soft_perf:
-            accuracy = soft_perf['outputs']['accuracy']
+            entropy = soft_perf['entropy']
+
+            pearson_r = None
+            accuracy = None
+            if "pearson_r" in soft_perf:
+                pearson_r = soft_perf['outputs']['pearson_r']
+            elif "accuracy" in soft_perf:
+                accuracy = soft_perf['outputs']['accuracy']
+        except FileNotFoundError:
+            print("Directory doesn't have a softprompt_performance.json file inside"
+                  "likely because evalautions werent enabled.\n"
+                  "Skipping logging...")
 
         if AUTO_SPLIT:
             hardprompt = torch.load(
@@ -104,11 +113,12 @@ def run(args_list):
         results = {}
         results['hardprompt'] = hardprompt
         print(f"\n--------------------------Actual hardprompt: {hardprompt}--------------------------\n")
-        print(f"|=== Entropy: {entropy}")
-        if pearson_r is not None:
-            print(f"|=== Pearson R: {pearson_r}")
-        if accuracy is not None:
-            print(f"|=== Accuracy: {accuracy}")
+        if has_perf_file:
+            print(f"|=== Entropy: {entropy}")
+            if pearson_r is not None:
+                print(f"|=== Pearson R: {pearson_r}")
+            if accuracy is not None:
+                print(f"|=== Accuracy: {accuracy}")
 
         random_idxs = torch.randint(0, len(test_dataset), (args.num_samples,))
 
@@ -172,9 +182,9 @@ def run(args_list):
                 tokenized_target = full_ids[antimask].to(model.device)
                 target_text = tokenizer.decode(tokenized_target, skip_special_tokens=True)
                 print(f"Actual: {target_text}")
-            print(f"<soft generation start>{input_text}{gen_prompt}{soft_gen}<soft generation end>\n")
+            print(f"SOFT: {input_text}{gen_prompt}<soft generation start>{soft_gen}<soft generation end>\n")
             soft_generations += (input_text + gen_prompt + soft_gen + "\n")
-
+            print("----------")
             base_embs = torch.cat([input_embed, gen_embed], dim=1)
             attention_mask = torch.ones(base_embs.size()[:-1], device=input_embed.device, dtype=torch.long)
             base_gen_ids = model.generate(
@@ -185,7 +195,7 @@ def run(args_list):
                 pad_token_id=tokenizer.eos_token_id
             )
             base_gen = tokenizer.decode(base_gen_ids[0], skip_special_tokens=True)
-            print(f"<base generation start>{gen_prompt}{base_gen}<base generation end>\n")
+            print(f"BASE: {gen_prompt}<base generation start>{base_gen}<base generation end>\n")
             base_generations += (input_text + gen_prompt + base_gen + "\n")
         
         results['verbalization_full'] = soft_generations
@@ -193,10 +203,10 @@ def run(args_list):
 
         log_json(os.path.join(dataset_dir, "explanations.json"), results)
 
-
-        for key in results:
-            soft_perf[key] = results[key]
-        log_json(os.path.join(dataset_dir, "softprompt_performance.json"), soft_perf)
+        if has_perf_file:
+            for key in results:
+                soft_perf[key] = results[key]
+            log_json(os.path.join(dataset_dir, "softprompt_performance.json"), soft_perf)
 
         # print("\n\n\n")
         # print("=====SOFTPROMPT ELICITED DESCRIPTION (CONDITIONED)======\n\n")
