@@ -1,5 +1,5 @@
 """
-
+This script trains Soft Prompt on a given Dataset
 """
 
 import torch
@@ -24,13 +24,16 @@ from softprompt_experiments.utils import (
 )
 
 def run(args_list):
+    # Extract File Name as the Experiment Name
     exp_name = os.path.basename(__file__)
+
     print(
         "="*100, "\n", 
         f"\t\t\t\tRunning script: {exp_name}", "\n",
         "="*100,"\n"
     )
 
+    # Get Arguments from the Command Line (If provided else the default values are picked)
     parser = argparse.ArgumentParser()
     parser.add_argument("--init", type=str, default=None)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -49,6 +52,7 @@ def run(args_list):
     
     args, _ = parser.parse_known_args(args_list)
     
+    # Set Global Variables using Parsed Arguments
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     SAVE_DIR = args.save_directory
     AUTO_SPLIT = args.auto_split
@@ -66,16 +70,27 @@ def run(args_list):
     print("VERBOSE: ", VERBOSE)
     print("AUTO_SPLIT: ", AUTO_SPLIT)
 
+    # Initialize Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token = tokenizer.eos_token   # Set Padding Token as the EOS Token
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    # Determine Device and Float Data Type
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"
+
+    # dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    dtype = torch.bfloat16
+
+    # Initialize the Pre-Trained Model
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         dtype=dtype
     ).to(device)
+
+    # Set the Model in Evaluation Mode
     model.eval()
+
+    # Get the Word Embedding Matrix
     word_embeddings = model.get_input_embeddings()
 
     # Get dataset sub directories
@@ -86,13 +101,17 @@ def run(args_list):
                 dataset_dirs.append(entry.path)
 
     num_datasets = len(dataset_dirs)
+
+    # If No Datasets are found, Throw a ValueError
     if num_datasets > 0:
         print(f"\nFound ({num_datasets}) datasets in directory")
     else:
         raise ValueError("path to directory has no datasets")
 
+    # For each individual Dataset
     for dataset_dir in tqdm(dataset_dirs):
-        # load dataset
+
+        # Load the Train and Test Datasets and Dataloaders
         train_dataset, test_dataset, train_loader, test_loader = get_train_test_from_tokenized(
             dataset_dir,
             BATCH_SIZE,
@@ -100,7 +119,7 @@ def run(args_list):
             auto_split=AUTO_SPLIT
         )
 
-        # initialize softprompt
+        # Initialize softprompt
         if SEED is not None:
             vocab_size = word_embeddings.num_embeddings
             rng = np.random.default_rng(seed=SEED)
@@ -120,10 +139,15 @@ def run(args_list):
             num_tokens=NUM_TOKENS
         )
         
-        # begin training
+        # Train the Initialized Soft Prompts
         train_loss, test_loss, entropy = train_softprompt_from_tokenized(
-            softprompt, LR, EPOCHS, train_loader, test_loader, 
-            verbose=VERBOSE, verbose_level=VERBOSE_LEVEL,
+            softprompt, 
+            LR, 
+            EPOCHS, 
+            train_loader, 
+            test_loader, 
+            verbose=VERBOSE, 
+            verbose_level=VERBOSE_LEVEL,
             entropy_reg_constant=ENTROPY_REG_CONSTANT
         )
 
