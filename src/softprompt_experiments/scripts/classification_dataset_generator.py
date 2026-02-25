@@ -6,6 +6,7 @@ import json
 import nltk
 from nltk.corpus import brown
 from vllm import LLM, SamplingParams
+from vllm.sampling_params import StructuredOutputsParams
 import re
 from tqdm import tqdm
 
@@ -184,7 +185,11 @@ def run(args_list):
     )
 
     # Setup SamplingParams for the vLLM along with a guided json schema for guided decoding
-    sampling_params = SamplingParams(temperature = 1.0, max_tokens = 2000) # TODO: check this
+    sampling_params = SamplingParams(
+        temperature = 1.0, 
+        max_tokens = 2000,
+        structured_outputs = StructuredOutputsParams(json = JSON_SCHEMA)
+    ) # TODO: check this
 
     # Generate Sentences for each dataset
     generation_tasks = []
@@ -201,7 +206,7 @@ def run(args_list):
                 # Construct messages to be sent to the LLM
                 messages = [
                     {"role": "system", "content": SENTENCE_GENERATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Target Keyword: {kw}. Generate {CHUNK_SIZE} unique sentences without using the keyword."}
+                    {"role": "user", "content": f"Target Keyword: {kw}. Generate a JSON with {CHUNK_SIZE} unique sentences without using the keyword."}
                 ]
 
                 generation_tasks.append({
