@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -N 1
 #SBATCH -n 8
-#SBATCH --mem=16g
+#SBATCH --mem=32g
 #SBATCH -J "Gen DoD"
 #SBATCH -p short
 #SBATCH -t 24:00:00
