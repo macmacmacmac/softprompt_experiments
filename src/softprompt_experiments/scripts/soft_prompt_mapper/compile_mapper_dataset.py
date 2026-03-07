@@ -3,6 +3,11 @@ import argparse
 import sqlite3
 from tqdm import tqdm
 import torch
+import re
+
+def extract_just_keywords_from_hard_prompt(hard_prompt: str) -> str:
+    return hard_prompt.split("Classify the following sentence as:")[-1].strip()
+
 
 # Driver Code
 def run(args_list):
@@ -29,12 +34,53 @@ def run(args_list):
     print(f"Connecting to database: {DB_PATH}...")
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+
+    # # Detect and isolate datasets with non-English/weird characters
+    # print("Scanning database for non-standard characters...")
+
+    # # Fetch all dataset_ids and sentences from the sentences table
+    # cursor.execute("SELECT dataset_id, sentence FROM sentences")
+    
+    # invalid_datasets = set()
+    
+    # # Regex for matching any character that is NOT a standard English letter, number, space, or basic punctuation
+    # # invalid_char_regex = re.compile(r'[^a-zA-Z0-9\s.,!?\'"()\-:]')
+    # # invalid_char_regex = re.compile(r'[^a-zA-Z0-9\s.,!?\'"()\-:;&$/%_+*#@\u2018\u2019\u201C\u201D\u2013\u2014]')
+
+    # # Matches standard Chinese characters
+    # invalid_char_regex = re.compile(r'[\u4e00-\u9fff]')
+    
+    # for dataset_id, sentence in tqdm(cursor.fetchall(), desc="Filtering sentences"):
+
+    #     # If the dataset_id is already not in the set of invalid dataset ids
+    #     if dataset_id not in invalid_datasets:
+
+    #         # If the search finds an illegal character, then add the dataset id into the invalid datasets set
+    #         if invalid_char_regex.search(sentence):
+    #             invalid_datasets.add(dataset_id)
+    
+    # print(f"Found {len(invalid_datasets)} corrupted datasets containing illegal characters. These will be excluded from the Mapper Dataset.")
+
+    # # Fetch all dataset_ids and hard prompts from the datasets table
+    # cursor.execute("SELECT dataset_id, hard_prompt FROM datasets")
+    # rows = cursor.fetchall()
+    # conn.close()
+
+    # # Create a Dataset ID -> Hard Prompt Dict (Map)
+    # # Exclude all which appear in the set of invalid_datasets
+    # dataset_map = {}
+    # for dataset_id, hard_prompt in rows:
+    #     if dataset_id not in invalid_datasets:
+    #         dataset_map[dataset_id] = hard_prompt
+            
+    # print(f"Found {len(dataset_map)} hard prompts ready for compilation.")
+
     cursor.execute("SELECT dataset_id, hard_prompt FROM datasets")
     rows = cursor.fetchall()
     conn.close()
 
     # Create a Dataset ID -> Hard Prompt Dict (Map)
-    dataset_map = {row[0]: row[1] for row in rows}
+    dataset_map = {row[0]: extract_just_keywords_from_hard_prompt(row[1]) for row in rows}
     print(f"Found {len(dataset_map)} hard prompts in the database.")
 
     # Iterate through the directories and compile the data

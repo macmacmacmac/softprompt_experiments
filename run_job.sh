@@ -3,8 +3,8 @@
 #SBATCH -n 8
 #SBATCH --mem=32g
 #SBATCH -J "DoD"
-#SBATCH -p long
-#SBATCH -t 48:00:00
+#SBATCH -p short
+#SBATCH -t 24:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -C A100
 #SBATCH -o logs.out
@@ -37,4 +37,4 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 # -----------------------------
 # Run the Job (Example: Python Script / Module)
 # -----------------------------
-python -u -m run_experiment --scripts train_classification_softprompts
+python -u -m run_experiment --scripts soft_prompt_mapper.compile_mapper_dataset
