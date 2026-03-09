@@ -76,6 +76,9 @@ def run(args_list=None):
     parser.add_argument("--dataset_path", type=str, default="./datasets/mapper_training_dataset/compiled_mapper_dataset.pt")
     parser.add_argument("--save_dir", type=str, default="./mapper_lora_weights")
     parser.add_argument("--seed", type=int, default=47)
+    parser.add_argument("--lora_rank", type=int, default=4)
+    parser.add_argument("--lora_dropout", type=float, default=0.1)
+    parser.add_argument("--optim_weight_decay", type=float, default=0.1) 
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
@@ -87,6 +90,9 @@ def run(args_list=None):
     BATCH_SIZE = args.batch_size
     NUM_TOKENS = args.num_tokens
     SEED = args.seed
+    LORA_RANK = args.lora_rank
+    LORA_DROPOUT = args.lora_dropout
+    OPTIM_WEIGHT_DECAY = args.optim_weight_decay
 
     # Determine DEVICE and DTYPE
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -105,12 +111,12 @@ def run(args_list=None):
     
     # Configure LoRA Config to target the key linear layers of attention and feed-forward networks
     lora_config = LoraConfig(
-        r=16, 
-        lora_alpha=32,
-        target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=0.05,
-        bias="none",
-        task_type=TaskType.CAUSAL_LM
+        r = LORA_RANK, 
+        lora_alpha = 2 * LORA_RANK,
+        target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        lora_dropout = LORA_DROPOUT,
+        bias = "none",
+        task_type = TaskType.CAUSAL_LM
     )
     
     # Attach the LoRA adapters to the base model
@@ -123,7 +129,9 @@ def run(args_list=None):
     llama_word_embeddings = model.get_base_model().get_input_embeddings()
 
     # Init Optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
+    optimizer = torch.optim.AdamW(model.parameters(), 
+                                  lr = LR, 
+                                  weight_decay = OPTIM_WEIGHT_DECAY)
 
 
     # ┌───────────────────────────────────────────────┐
