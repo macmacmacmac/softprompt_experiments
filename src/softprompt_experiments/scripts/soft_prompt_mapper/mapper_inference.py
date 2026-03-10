@@ -81,10 +81,10 @@ def run(args_list=None):
             inputs_embeds = soft_prompt.unsqueeze(0).to(DEVICE, dtype=DTYPE)    # (1, seq_len, embed_dim)
             
             # Create an attention mask of 1s for the seq_len tokens
-            attention_mask = torch.ones(inputs_embeds.shape[:2], dtype=torch.long, device=DEVICE)
+            attention_mask = torch.ones(inputs_embeds.shape[:2], dtype=torch.long, device=DEVICE) # (1, seq_len)
             
             # Generate the discrete text
-            # We use greedy decoding (temperature=0.0) because we want the exact learned mapping, not creative text.
+            # Using greedy decoding (temperature=0.0)
             outputs = model.generate(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
