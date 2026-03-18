@@ -5,6 +5,8 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
+# TODO: Perform InSPEcT on the trained soft prompts
+
 def run(args_list=None):
     exp_name = os.path.basename(__file__)
     print(

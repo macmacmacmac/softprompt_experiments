@@ -135,8 +135,11 @@ def run(args_list):
     DB_NAME = args.db_name
 
     # Other variables
-    SENTENCES_PER_KEYWORD = MINI_DATASET_SIZE // 5
-    CHUNK_SIZE = 10 # Ask LLM to generate CHUNK_SIZE sentences at a time to maintain high quality
+    NUM_KEYWORDS = 5
+    SENTENCES_PER_KEYWORD = MINI_DATASET_SIZE // NUM_KEYWORDS
+
+    # Ask Teacher LLM to generate CHUNK_SIZE sentences at a time to maintain high quality
+    CHUNK_SIZE = 10 
     NUM_CHUNKS_PER_KEYWORD = max(1, SENTENCES_PER_KEYWORD // CHUNK_SIZE)
 
     # Delete the Dataset if it already exists
@@ -158,8 +161,8 @@ def run(args_list):
 
     # For each mini dataset
     for i in range(NUM_OF_DATASETS):
-        # Randomly sample 5 keywords from the keywords pool
-        keywords = tuple(random.sample(safe_keywords, 5))
+        # Randomly sample NUM_KEYWORDS keywords from the keywords pool
+        keywords = tuple(random.sample(safe_keywords, NUM_KEYWORDS))
 
         # Add the entry for dataset id and its associated keywords
         dod_keyword_maps.append({
@@ -221,7 +224,7 @@ def run(args_list):
                 })
 
     # Process and save 10,000 prompts at a time
-    VLLM_BATCH_SIZE = 10000
+    VLLM_BATCH_SIZE = 10_000
     total_chunks = (len(generation_tasks) + VLLM_BATCH_SIZE - 1) // VLLM_BATCH_SIZE
     success_count = 0
     

@@ -6,6 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from softprompt_experiments.models.softprompt import SoftPrompt
 from tqdm import tqdm
+import pandas as pd
 
 
 class SQLiteClassificationDataset(Dataset):
@@ -140,6 +141,7 @@ def run(args_list):
     parser.add_argument("--num_tokens", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--db_path", type=str, default="./datasets/mapper_classification_datasets/classification_5k.sqlite")
+    parser.add_argument("--training_stats_dir_path", type=str, default="./training_stats")
     parser.add_argument("--seed", type=int, default=47)
     args, _ = parser.parse_known_args(args_list)
     
@@ -151,8 +153,12 @@ def run(args_list):
     EPOCHS = args.epochs
     NUM_TOKENS = args.num_tokens
     BATCH_SIZE = args.batch_size
+    TRAINING_STATS_DIR_PATH = args.training_stats_dir_path
     SEED = args.seed
 
+    # Other Global Variables
+    DB_NAME = DB_PATH.split("/")[-1]
+    TRAINING_STATS_FILE_PATH = f"{TRAINING_STATS_DIR_PATH}/{DB_NAME}/training_stats.csv"
 
     # Determine DEVICE and DTYPE
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -195,6 +201,18 @@ def run(args_list):
 
     # Init Dataset Progress Bar
     dataset_pbar = tqdm(dataset_ids, desc = "Master Dataset Progress")
+
+
+    # TODO: Preload existing training stats, if it exists already
+
+
+    # TODO: Test this
+    # Init a dict to save training stats
+    training_stats = {
+        'dataset_id': [],
+        'train_accuracy': [],
+        'validation_accuracy': []
+    }
 
     # Loop over all dataset ids
     for dataset_id in dataset_pbar:
@@ -403,7 +421,22 @@ def run(args_list):
         soft_prompt.save_softprompt(save_dir)
         tqdm.write(f"\nTraining complete! Soft prompt saved to {save_dir}/softprompt.pt")
 
+        # TODO: Test This
+        # ┌───────────────────────────────────────────────┐
+        # │            WRITE TRAINING STATS               │
+        # └───────────────────────────────────────────────┘
+        training_stats['dataset_id'].append(dataset_id)
+        training_stats['training_accuracy'].append(train_accuracy)
+        training_stats['validation_accuracy'].append(val_accuracy)
+
+
         # Free up some allocations
         del soft_prompt
         del optimizer
         torch.cuda.empty_cache()
+
+
+    # TODO: Test This
+    # Training Ended, we can save the CSV file with training stats
+    df = pd.DataFrame(training_stats)
+    df.to_csv(f'{TRAINING_STATS_DIR_PATH}/{DB_NAME}/training_stats.csv', index=False)
