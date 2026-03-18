@@ -1,9 +1,10 @@
 import os
 import argparse
-import random
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
+from src.softprompt_experiments.InSPEcT_utils import elicit_description_using_inspect_technique, BEST_PATCHES
+import pandas as pd
 
 def run(args_list=None):
     exp_name = os.path.basename(__file__)
@@ -17,6 +18,7 @@ def run(args_list=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--inspect_soft_prompts_dir", type=str, default="./inspect_soft_prompts")
     parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights")
+    parser.add_argument("--num_tokens", type=int, default=20)
     parser.add_argument("--seed", type=int, default=47)
     args, _ = parser.parse_known_args(args_list)
 
@@ -24,7 +26,7 @@ def run(args_list=None):
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     INSPECT_SOFT_PROMPTS_DIR = args.inspect_soft_prompts_dir
     LORA_DIR = args.lora_dir
-    SEED = args.seed
+    NUM_TOKENS = args.num_tokens
 
     # Determine DEVICE and DTYPE
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -79,6 +81,19 @@ def run(args_list=None):
 
                 # Decode the generated token IDs back into an English string
                 pred_text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+
+                # TODO: Get Elicited Text using InSPEcT Technique
+                inspect_elicited_results = elicit_description_using_inspect_technique(
+                    model_name=MODEL_NAME,
+                    num_tokens=NUM_TOKENS,
+                    soft_prompt=soft_prompt,
+                    dataset_name="REPLACE_ME",
+                    layer_combinations=BEST_PATCHES,
+                    target_prompt_type='few_shot'
+                )
+
+                df = pd.DataFrame(inspect_elicited_results)
+                df.to_csv(f'inspect_results/{dataset_name}/elicitations.csv', index=False)
 
                 # TODO: Add Evaluation over here in terms of ROUGE1, Class Rate etc.
 

@@ -29,12 +29,20 @@ ALL_LAYER_COMBINATIONS = [
 ]
 
 
+# Best Patches of Layer Combinations for Patchscopes Experiment
+BEST_PATCHES = [
+    {"min_source": -1, "max_source": -1, "min_target": -1, "max_target": -1},
+    {"min_source": 13, "max_source": 15, "min_target": 24, "max_target": 26}
+]
+
+
 
 def elicit_description_using_inspect_technique(
         model_name,
         num_tokens,
         soft_prompt,
         dataset_name,
+        layer_combinations,
         target_prompt_type='few_shot'
 ) -> List[Dict]:
 
@@ -53,17 +61,22 @@ def elicit_description_using_inspect_technique(
 
     # Init List to store results
     results = []
+
+    # Determine Layer Cominations
+    combinations = layer_combinations or ALL_LAYER_COMBINATIONS
+
+    print(f"Using Following Layer Combinations: {combinations}")
     
     # Calculate total iterations for progress bar
     total_iterations = sum(
         (comb.get("max_source") - comb.get("min_source") + 1) * 
         (comb.get("max_target") - comb.get("min_target") + 1)
-        for comb in ALL_LAYER_COMBINATIONS
+        for comb in combinations
     )
 
     with tqdm(total=total_iterations, desc="Patchscopes experiments") as pbar:
         # For each combination
-        for comb in ALL_LAYER_COMBINATIONS:
+        for comb in combinations:
 
             # For each source layer ranging from min to max value
             for source_layer in range(comb.get("min_source"), comb.get("max_source") + 1):
