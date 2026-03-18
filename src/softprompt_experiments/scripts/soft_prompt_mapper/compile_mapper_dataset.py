@@ -3,7 +3,7 @@ import argparse
 import sqlite3
 from tqdm import tqdm
 import torch
-import re
+import random
 
 
 def extract_just_keywords_from_hard_prompt(hard_prompt: str) -> str:
@@ -23,58 +23,22 @@ def run(args_list):
     parser = argparse.ArgumentParser()
     parser.add_argument("--db_path", type=str, default="./datasets/mapper_classification_datasets/classification_5k.sqlite")
     parser.add_argument("--trained_soft_prompts_path", type=str, default="./trained_soft_prompts")
-    parser.add_argument("--mapper_dataset_path", type=str, default="./datasets/mapper_training_dataset/compiled_mapper_dataset.pt")
+    parser.add_argument("--train_dataset_path", type=str, default="./datasets/mapper_training_dataset/train_mapper_dataset.pt")
+    parser.add_argument("--val_dataset_path", type=str, default="./datasets/mapper_training_dataset/val_mapper_dataset.pt")
+    parser.add_argument("--seed", type=int, default=47)
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
     DB_PATH = args.db_path
     TRAINED_SOFT_PROMPTS_PATH = args.trained_soft_prompts_path
-    MAPPER_DATASET_PATH = args.mapper_dataset_path
+    TRAIN_DATASET_PATH = args.train_dataset_path
+    VAL_DATASET_PATH = args.val_dataset_path
+    SEED = args.seed
 
     # Fetch all hard prompts from SQLite
     print(f"Connecting to database: {DB_PATH}...")
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    # # Detect and isolate datasets with non-English/weird characters
-    # print("Scanning database for non-standard characters...")
-
-    # # Fetch all dataset_ids and sentences from the sentences table
-    # cursor.execute("SELECT dataset_id, sentence FROM sentences")
-    
-    # invalid_datasets = set()
-    
-    # # Regex for matching any character that is NOT a standard English letter, number, space, or basic punctuation
-    # # invalid_char_regex = re.compile(r'[^a-zA-Z0-9\s.,!?\'"()\-:]')
-    # # invalid_char_regex = re.compile(r'[^a-zA-Z0-9\s.,!?\'"()\-:;&$/%_+*#@\u2018\u2019\u201C\u201D\u2013\u2014]')
-
-    # # Matches standard Chinese characters
-    # invalid_char_regex = re.compile(r'[\u4e00-\u9fff]')
-    
-    # for dataset_id, sentence in tqdm(cursor.fetchall(), desc="Filtering sentences"):
-
-    #     # If the dataset_id is already not in the set of invalid dataset ids
-    #     if dataset_id not in invalid_datasets:
-
-    #         # If the search finds an illegal character, then add the dataset id into the invalid datasets set
-    #         if invalid_char_regex.search(sentence):
-    #             invalid_datasets.add(dataset_id)
-    
-    # print(f"Found {len(invalid_datasets)} corrupted datasets containing illegal characters. These will be excluded from the Mapper Dataset.")
-
-    # # Fetch all dataset_ids and hard prompts from the datasets table
-    # cursor.execute("SELECT dataset_id, hard_prompt FROM datasets")
-    # rows = cursor.fetchall()
-    # conn.close()
-
-    # # Create a Dataset ID -> Hard Prompt Dict (Map)
-    # # Exclude all which appear in the set of invalid_datasets
-    # dataset_map = {}
-    # for dataset_id, hard_prompt in rows:
-    #     if dataset_id not in invalid_datasets:
-    #         dataset_map[dataset_id] = hard_prompt
-            
-    # print(f"Found {len(dataset_map)} hard prompts ready for compilation.")
 
     cursor.execute("SELECT dataset_id, hard_prompt FROM datasets")
     rows = cursor.fetchall()
@@ -118,17 +82,31 @@ def run(args_list):
         })
 
     # Save the Compiled Data List to a Torch File
-    print(f"\nCompilation Complete!")
-    print(f"Successfully paired: {len(compiled_data)} datasets.")
+    print(f"\nCompilation Complete! Successfully paired: {len(compiled_data)} datasets.")
 
     # Log how many datasets were skipped
     if missing_count > 0:
         print(f"Skipped {missing_count} datasets (softprompt.pt not found).")
 
 
-    os.makedirs(os.path.dirname(MAPPER_DATASET_PATH), exist_ok=True)
-    torch.save(compiled_data, MAPPER_DATASET_PATH)
-    print(f"Saved unified PyTorch dataset to: {MAPPER_DATASET_PATH}")
+    # Perform Train / Validation Split (90 / 10)
+    print("\nShuffling and splitting datasets...")
+    random.seed(SEED)
+    random.shuffle(compiled_data)
+
+    split_idx = int(len(compiled_data) * 0.9)
+    train_data = compiled_data[:split_idx]
+    val_data = compiled_data[split_idx:]
+
+    # Create the Directory for saving the datasets
+    os.makedirs(os.path.dirname(TRAIN_DATASET_PATH), exist_ok=True)
+    
+    # Save the Training and Validation Datasets
+    torch.save(train_data, TRAIN_DATASET_PATH)
+    torch.save(val_data, VAL_DATASET_PATH)
+    
+    print(f"Saved Train Split ({len(train_data)} samples) to: {TRAIN_DATASET_PATH}")
+    print(f"Saved Val Split ({len(val_data)} samples) to: {VAL_DATASET_PATH}")
 
 
 

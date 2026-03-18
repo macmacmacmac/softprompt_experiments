@@ -3,6 +3,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from tqdm import tqdm
+from typing import List, Dict
 
 
 # Determine DEVICE and DTYPE
@@ -35,7 +36,7 @@ def elicit_description_using_inspect_technique(
         soft_prompt,
         dataset_name,
         target_prompt_type='few_shot'
-):
+) -> List[Dict]:
 
     # Create a Target Prompt for the experiments
     target_prompt = create_target_prompt(num_tokens, target_prompt_type, dataset_name)
@@ -83,12 +84,6 @@ def elicit_description_using_inspect_technique(
                         target_prompt_type
                     )
 
-                    # # Print out details after the experiment run
-                    # if print_out:
-                    #     print(f"results for {source_layer=} {target_layer=}:")
-                    #     print(f"{patched_output=}")
-                    #     print()
-
                     # Append the experiment output to the results list
                     results.append({
                         "source_layer": source_layer,
@@ -108,7 +103,8 @@ def create_target_prompt(num_tokens: int, target_prompt_type: str, dataset_name:
         case 'few_shot':
             return create_few_shot_prompt(num_tokens)
         case 'cot':
-            # Find a random test example from the test dataset
+            # Find a random test example from the test dataset 
+            # TODO: Change this to the DoD dataset instead of using InSPEcT datasets, as the soft prompt is trained on DoD
             text_field = determine_text_field_for_inspect_dataset(dataset_name)
             random_test_example = load_dataset(dataset_name, trust_remote_code=True, split='test').shuffle()[0][text_field]
 
@@ -198,8 +194,8 @@ def perform_inspect_for_src_tgt_pair(
                                          num_tokens, 
                                          target_layer = target_layer,
                                          source_layer = source_layer,
-                                         do_sample = True,
-                                         visualize_confidence = True)
+                                         do_sample = False,
+                                         visualize_confidence = False)
 
 
 
@@ -362,7 +358,6 @@ def set_hs_patch_hooks(model, hs_patch_config, num_of_tokens):
         def hook(module, input, output):
             for position_, hs_ in position_hs:
                 # (batch, sequence, hidden_state)
-                # output[0][0, position_ : position_ + num_of_tokens] = hs_ #NOTE: A Bug Maybe, as it is straightforwardly incompatible...
                 output[0][position_ : position_ + num_of_tokens] = hs_
         return hook
 

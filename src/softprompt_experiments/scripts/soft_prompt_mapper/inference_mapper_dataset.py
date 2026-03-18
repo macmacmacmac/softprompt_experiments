@@ -4,9 +4,9 @@ import random
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
+from src.softprompt_experiments.InSPEcT_utils import elicit_description_using_inspect_technique
 
-# TODO: Perform InSPEcT on the trained soft prompts
-
+# Driver Code
 def run(args_list=None):
     exp_name = os.path.basename(__file__)
     print(
@@ -17,18 +17,19 @@ def run(args_list=None):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_path", type=str, default="./datasets/mapper_training_dataset/compiled_mapper_dataset.pt")
+    parser.add_argument("--val_dataset_path", type=str, default="./datasets/mapper_training_dataset/val_mapper_dataset.pt")
     parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights")
     parser.add_argument("--num_samples", type=int, default=10)
+    parser.add_argument("--num_tokens", type=int, default=20)
     parser.add_argument("--seed", type=int, default=47)
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-    DATASET_PATH = args.dataset_path
+    VAL_DATASET_PATH = args.val_dataset_path
     LORA_DIR = args.lora_dir
     NUM_SAMPLES = args.num_samples
-    SEED = args.seed
+    NUM_TOKENS = args.num_tokens
 
     # Determine DEVICE and DTYPE
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -37,15 +38,8 @@ def run(args_list=None):
     # ┌───────────────────────────────────────────────┐
     # │                   DATASET PREP                │
     # └───────────────────────────────────────────────┘
-    print(f"Loading compiled dataset from {DATASET_PATH}...")
-    full_dataset = torch.load(DATASET_PATH, map_location="cpu", weights_only=True)
-
-    # Shuffle using the exact same seed as training so we get the exact same Val set
-    random.seed(SEED)
-    random.shuffle(full_dataset)
-    
-    split_idx = int(len(full_dataset) * 0.9)
-    val_dataset = full_dataset[split_idx:]
+    print(f"Loading Validation dataset from {VAL_DATASET_PATH}...")
+    val_dataset = torch.load(VAL_DATASET_PATH, map_location="cpu", weights_only=True)
     
     print(f"Validation Dataset size: {len(val_dataset)}")
 
@@ -97,6 +91,15 @@ def run(args_list=None):
             
             # Decode the generated token IDs back into an English string
             pred_text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+
+            # TODO: Get Elicited Text using InSPEcT Technique
+            # inspect_elicited_texts = elicit_description_using_inspect_technique(
+            #     model_name=MODEL_NAME,
+            #     num_tokens=NUM_TOKENS,
+            #     soft_prompt=soft_prompt,
+            #     dataset_name="REPLACE_ME",
+            #     target_prompt_type='few_shot'
+            # )
 
             # ┌───────────────────────────────────────────────┐
             # │                   EVALUATION                  │

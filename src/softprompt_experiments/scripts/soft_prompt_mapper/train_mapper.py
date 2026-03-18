@@ -5,7 +5,6 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import LoraConfig, get_peft_model, TaskType
 from tqdm import tqdm
-import random
 
 # PyTorch Dataset wrapper on the Mapper Dataset from Soft Prompts to Hard Prompts
 class MapperDataset(Dataset):
@@ -73,9 +72,9 @@ def run(args_list=None):
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_tokens", type=int, default=20)
-    parser.add_argument("--dataset_path", type=str, default="./datasets/mapper_training_dataset/compiled_mapper_dataset.pt")
+    parser.add_argument("--train_dataset_path", type=str, default="./datasets/mapper_training_dataset/train_mapper_dataset.pt")
+    parser.add_argument("--val_dataset_path", type=str, default="./datasets/mapper_training_dataset/val_mapper_dataset.pt")
     parser.add_argument("--save_dir", type=str, default="./mapper_lora_weights")
-    parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--lora_rank", type=int, default=4)
     parser.add_argument("--lora_dropout", type=float, default=0.1)
     parser.add_argument("--optim_weight_decay", type=float, default=0.1) 
@@ -83,7 +82,8 @@ def run(args_list=None):
 
     # Parse all the arguments into Variables
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-    DATASET_PATH = args.dataset_path
+    TRAIN_DATASET_PATH = args.train_dataset_path
+    VAL_DATASET_PATH = args.val_dataset_path
     SAVE_DIR = args.save_dir
     LR = args.lr
     EPOCHS = args.epochs
@@ -137,20 +137,9 @@ def run(args_list=None):
     # ┌───────────────────────────────────────────────┐
     # │                   DATASET PREP                │
     # └───────────────────────────────────────────────┘
-    print(f"Loading compiled Mapper dataset from {DATASET_PATH}...")
-    compiled_dataset = torch.load(DATASET_PATH, map_location="cpu", weights_only=True)
-
-    # Shuffle the data to ensure an even distribution
-    random.seed(SEED)
-    random.shuffle(compiled_dataset)
-    
-    # Perform 90/10 Train/Val Split
-    # TODO: Check if this way of splitting is good or not
-    # TODO: Validation accuracy is not improving, is 5 epochs very low?
-    # TODO: Training Accuracy increases normally, across each epoch (from 74% to 96%)
-    split_idx = int(len(compiled_dataset) * 0.9)
-    train_dataset = compiled_dataset[:split_idx]
-    val_dataset = compiled_dataset[split_idx:]
+    print("Loading Train and Validation datasets ...")
+    train_dataset = torch.load(TRAIN_DATASET_PATH, map_location="cpu", weights_only=True)
+    val_dataset = torch.load(VAL_DATASET_PATH, map_location="cpu", weights_only=True)
     
     print(f"Train Dataset size: {len(train_dataset)} | Validation Dataset size: {len(val_dataset)}")
 
