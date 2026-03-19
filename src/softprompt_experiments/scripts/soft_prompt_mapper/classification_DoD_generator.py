@@ -13,13 +13,14 @@ from tqdm import tqdm
 
 SENTENCE_GENERATION_SYSTEM_PROMPT = """
 You are an expert linguistic data generator. 
-Generate diverse, natural-sounding sentences that describe or imply the Target Keyword. 
+Generate diverse, natural-sounding sentences that describe or imply the Target Keyword.
+Your sentences can be full sentences or just phrases that describe the Target Keyword.
 
 CRITICAL CONSTRAINTS: 
 1. You MUST NOT use the target keyword, its root, or any direct derivations anywhere in the text.
-2. KEEP SENTENCES SHORT AND CONCISE (maximum 15 to 20 words per sentence).
+2. KEEP SENTENCES SHORT AND CONCISE (maximum 20 to 30 words per sentence).
 3. Ensure the sentences cover different contexts (e.g., everyday life, technical, emotional, professional).
-4. STRICTLY ENGLISH ONLY. Do not output Chinese or any other language.
+4. OUTPUT STRICTLY ENGLISH CHARACTERS ONLY. Do not output Chinese or any other language characters.
 5. NO conversational filler, NO self-correction, and NO tool calls. Generate ONLY the JSON.
 """
 
@@ -38,23 +39,27 @@ JSON_SCHEMA = json.dumps({
     "required": ["sentences"]
 })
 
-def get_safe_keywords(target_pool_size=15000):
+
+# Hardcode the target classes from the InSPEcT paper
+FORBIDDEN_VOCAB_SET = {
+    # SST2 and SST5 Classes
+    "positive", "negative", "terrible", "bad", "neutral", "good", "great",
+
+    # AGNews Classes
+    "world", "sports", "business", "technology"
+
+    # Subj Classes
+    "objective", "subjective", 
+
+    # TREC Classes
+    "abbreviation", "entity", "description", "human", "location", "number"
+}
+
+
+def get_safe_keywords(target_pool_size = 15000, restrict_by_forbidden_vocab = True):
     nltk.download('brown')
-    
-    # Hardcode the target classes from the InSPEcT paper
-    forbidden_vocab = {
-        # SST2 and SST5 Classes
-        "positive", "negative", "terrible", "bad", "neutral", "good", "great",
 
-        # AGNews Classes
-        "world", "sports", "business", "technology"
-
-        # Subj Classes
-        "objective", "subjective", 
-
-        # TREC Classes
-        "abbreviation", "entity", "description", "human", "location", "number"
-    }
+    forbidden_vocab_set = FORBIDDEN_VOCAB_SET if restrict_by_forbidden_vocab else set()
     
     # Get standard nouns and adjectives
     tagged_words = [(word.lower(), tag) for word, tag in brown.tagged_words()]
@@ -68,7 +73,7 @@ def get_safe_keywords(target_pool_size=15000):
     
     safe_pool = []
     for word, _ in freq_dist.most_common():
-        if word not in forbidden_vocab and len(word) > 3: # Skip tiny words
+        if word not in forbidden_vocab_set and len(word) > 3: # Skip tiny words
             safe_pool.append(word)
             
         if len(safe_pool) >= target_pool_size:
@@ -110,6 +115,7 @@ def setup_database(db_path):
     return conn, cursor
 
 
+# Driver Code
 def run(args_list):
     exp_name = os.path.basename(__file__)
     print(
@@ -127,7 +133,6 @@ def run(args_list):
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
-    # TEACHER_MODEL_NAME = "Qwen/Qwen2.5-32B-Instruct"
     TEACHER_MODEL_NAME = "Qwen/Qwen2.5-32B-Instruct-AWQ"
     MINI_DATASET_SIZE = args.mini_dataset_size
     NUM_OF_DATASETS = args.num_of_datasets
@@ -152,7 +157,7 @@ def run(args_list):
     conn, cursor = setup_database(db_path)
 
     # Get all Safe Keywords (Nouns / Adjectives) from the Brown Corpus
-    safe_keywords = get_safe_keywords()
+    safe_keywords = get_safe_keywords(restrict_by_forbidden_vocab=False)
 
     # Maintain a Maps of mini-dataset -> keywords
     dod_keyword_maps = []
@@ -196,7 +201,7 @@ def run(args_list):
         presence_penalty = 0.5,
         max_tokens = 1000,
         structured_outputs = StructuredOutputsParams(json = JSON_SCHEMA)
-    ) # TODO: check this
+    )
 
     # Generate Sentences for each dataset
     generation_tasks = []
