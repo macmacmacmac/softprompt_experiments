@@ -135,7 +135,8 @@ def create_target_prompt(num_tokens: int, target_prompt_type: str, dataset_name:
             raise ValueError("Invalid target_prompt_type supplied. Supported values are: 'few_shot', 'cot'.")
 
 
-def create_few_shot_prompt(num_tokens, separator='|'):
+def create_few_shot_prompt(num_tokens, separator='|', seed=47):
+    random.seed(seed)
     selected_examples = random.sample(FEW_SHOT_EXAMPLES, 3)
     separator = " " + separator + " "
     prompt = separator.join(selected_examples) + separator[:-1] + " x" * num_tokens

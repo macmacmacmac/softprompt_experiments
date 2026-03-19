@@ -6,6 +6,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from src.softprompt_experiments.InSPEcT_utils import elicit_description_using_inspect_technique, BEST_PATCHES
 import pandas as pd
+import string
 
 # Driver Code
 def run(args_list=None):
@@ -153,30 +154,64 @@ def run(args_list=None):
 
 
             # TODO: Calculate Recall, Precision, and F1 Score
-            for i in range(len(inspect_elicited_results)):
-                output = inspect_elicited_results[i]['output']
-                elicited_set = set([w.strip().lower() for w in output.split(" ") if w.strip()])
+            # for i in range(len(inspect_elicited_results)):
+            #     output = inspect_elicited_results[i]['output']
+            #     elicited_set = set([w.strip().lower() for w in output.split(" ") if w.strip()])
 
-                # Calculate Overlap
-                overlap = target_set.intersection(elicited_set)
+            #     # Calculate Overlap
+            #     overlap = target_set.intersection(elicited_set)
                 
-                # Calculate Recall, Precision, and F1
+            #     # Calculate Recall, Precision, and F1
+            #     recall = len(overlap) / len(target_set) if len(target_set) > 0 else 0
+            #     precision = len(overlap) / len(elicited_set) if len(elicited_set) > 0 else 0
+                
+            #     # Calculate F1 score (if applicable)
+            #     if precision + recall > 0:
+            #         f1_score = 2 * (precision * recall) / (precision + recall)
+            #     else:
+            #         f1_score = 0.0
+
+            #     # TODO: Caluculate Class Rate
+            #     # TODO: Calculate ROUGE1
+
+            #     # Add the scores to the row
+            #     inspect_elicited_results[i]['recall'] = recall
+            #     inspect_elicited_results[i]['precision'] = precision
+            #     inspect_elicited_results[i]['f1_score'] = f1_score
+
+            # TODO: Calculate Recall, Precision, F1 Score, and Class Rate
+            for i in range(len(inspect_elicited_results)):
+                output = str(inspect_elicited_results[i]['output'])
+                
+                # INSPECT'S EXACT PRE-PROCESSING
+                # Remove punctuation and lowercase the text
+                clean_output = output.translate(str.maketrans('', '', string.punctuation)).lower()
+                elicited_words = set(clean_output.split())
+
+                # Class Rate Calculation
+                classes_count = sum(1 for c in target_set if c in elicited_words)
+                class_rate = classes_count / len(target_set) if len(target_set) > 0 else 0.0
+
+                # Calculate Recall, Precision and F1 Score
+                overlap = target_set.intersection(elicited_words)
+                
                 recall = len(overlap) / len(target_set) if len(target_set) > 0 else 0
-                precision = len(overlap) / len(elicited_set) if len(elicited_set) > 0 else 0
+                precision = len(overlap) / len(elicited_words) if len(elicited_words) > 0 else 0
                 
-                # Calculate F1 score (if applicable)
                 if precision + recall > 0:
                     f1_score = 2 * (precision * recall) / (precision + recall)
                 else:
                     f1_score = 0.0
 
-                # TODO: Caluculate Class Rate
-                # TODO: Calculate ROUGE1
-
                 # Add the scores to the row
+                inspect_elicited_results[i]['class_rate'] = class_rate
                 inspect_elicited_results[i]['recall'] = recall
                 inspect_elicited_results[i]['precision'] = precision
                 inspect_elicited_results[i]['f1_score'] = f1_score
+
+                if class_rate > 0:
+                    print(f"Inspect Elicitation achieved class rate: {class_rate} for layer pair: {inspect_elicited_results[i]['source_layer']},{inspect_elicited_results[i]['target_layer']}")
+                    print(f"Elicitation: {output}")
 
 
             # Save Elicitations using InSPEcT for this dataset
