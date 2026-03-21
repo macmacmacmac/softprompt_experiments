@@ -10,28 +10,34 @@ from vllm.sampling_params import StructuredOutputsParams
 import re
 from tqdm import tqdm
 
-
 SENTENCE_GENERATION_SYSTEM_PROMPT = """
 You are an expert linguistic data generator creating training data for a classifier.
-
-CRITICAL - ENGLISH ONLY:
-You are a multilingual model, but this task requires ONLY English ASCII characters (a-z, A-Z, 0-9, basic punctuation).
-DO NOT output Chinese, Japanese, Korean, Arabic, Cyrillic, or ANY non-ASCII characters.
-If you include non-English characters, your entire response will be discarded.
 
 TASK:
 Generate diverse text samples that describe, imply, or relate to the Target Keyword WITHOUT using that keyword.
 
+LENGTH DISTRIBUTION (CRITICAL):
+- At least 4 sentences MUST be 20-35 words long (detailed, descriptive sentences)
+- 3-4 sentences should be medium length (10-19 words)
+- 2-3 sentences can be short phrases (3-9 words)
+
+REALISM REQUIREMENTS - Make text feel natural and messy:
+- Sometimes skip punctuation at sentence ends
+- Sometimes use improper punctuation (double periods.., misplaced commas, or missing commas)
+- Vary capitalization: some sentences start lowercase, occasional CAPS for emphasis
+- Include informal styles: contractions, fragments, trailing off...
+- Mix formality levels (casual chat vs professional tone)
+
 VARIETY REQUIREMENTS - Mix these styles:
-- Short phrases (2-5 words): "a warm embrace", "pretty cool stuff"
-- Incomplete thoughts: "when times get tough...", "almost like..."
-- Descriptive fragments: "like a ray of sunshine", "the kind that stays with you"
-- Questions: "isn't that wonderful?", "ever felt that way?"
-- Full sentences: Keep under 25 words
+- Long detailed sentences (20-35 words): elaborate thoughts, multi-clause statements, storytelling snippets
+- Medium sentences (10-19 words): complete thoughts with some detail
+- Short phrases (3-9 words): punchy expressions, quick reactions
+- Incomplete thoughts: trailing off with "..."
+- Questions: rhetorical or conversational
 
 CONSTRAINTS:
-1. NEVER use the target keyword, its root, or direct derivations
-2. Mix short (3-8 words) and medium (10-20 words) lengths
+1. NEVER use the target keyword, its root, or direct derivations.
+2. Every sentence must be UNIQUE - no repetition across outputs.
 3. Cover different contexts: everyday life, technical, emotional, professional
 4. Output ONLY the JSON - no explanations, no filler
 """
@@ -121,7 +127,7 @@ def setup_database(db_path):
             sentence_id INTEGER PRIMARY KEY AUTOINCREMENT,
             dataset_id INTEGER NOT NULL,
             keyword_id INTEGER NOT NULL,
-            sentence TEXT NOT NULL,
+            sentence TEXT NOT NULL UNIQUE,
             split TEXT NOT NULL,
             FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id),
             FOREIGN KEY (keyword_id) REFERENCES keywords(keyword_id)
@@ -145,13 +151,14 @@ def run(args_list):
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
     parser.add_argument("--mini_dataset_size", type=int, default=500)
-    parser.add_argument("--num_of_datasets", type=int, default=100)
+    parser.add_argument("--num_of_datasets", type=int, default=5500)
     parser.add_argument("--save_directory", type=str, default="./datasets/mapper_classification_datasets")
     parser.add_argument("--db_name", type=str, default="DoD_2_5k.sqlite")
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
-    TEACHER_MODEL_NAME = "Qwen/Qwen2.5-32B-Instruct-AWQ"
+    # TEACHER_MODEL_NAME = "Qwen/Qwen2.5-32B-Instruct-AWQ"
+    TEACHER_MODEL_NAME = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
     MINI_DATASET_SIZE = args.mini_dataset_size
     NUM_OF_DATASETS = args.num_of_datasets
     SAVE_DIRECTORY = args.save_directory
@@ -208,7 +215,11 @@ def run(args_list):
     print(f"Loading {TEACHER_MODEL_NAME} into vLLM...")
     llm = LLM(
         model = TEACHER_MODEL_NAME,
-        quantization="awq",
+        tokenizer_mode = "mistral",
+        # quantization="awq",
+        quantization="bitsandbytes",
+        load_format="bitsandbytes",
+        max_model_len = 119712,
         tensor_parallel_size = 1,
         gpu_memory_utilization = 0.9 # Let vLLM use 90% of GPU VRAM for KV Cache
     )
@@ -255,6 +266,13 @@ def run(args_list):
     json_failure_count = 0
     non_english_sentence_count = 0
     non_english_dataset_ids = set()
+    duplicate_count = 0
+    seen_sentences = set()
+
+    # Tracking counters for sentence length distribution
+    total_sentence_count = 0
+    long_sentence_count = 0  # 15+ words
+    very_long_sentence_count = 0  # 20+ words
     
     print(f"Submitting {len(generation_tasks)} tasks to vLLM in chunks of {VLLM_BATCH_SIZE}...")
     
@@ -282,7 +300,22 @@ def run(args_list):
 
                 # Simple 80/20 Train/Test split assignment
                 for idx, sentence in enumerate(data.get("sentences", [])):
+                    # Skip duplicates using normalized comparison
+                    normalized_sentence = sentence.strip().lower()
+                    if normalized_sentence in seen_sentences:
+                        duplicate_count += 1
+                        continue
+                    seen_sentences.add(normalized_sentence)
+
                     split = "test" if idx % 10 >= 8 else "train"
+
+                    # Track sentence length distribution
+                    word_count = len(sentence.split())
+                    total_sentence_count += 1
+                    if word_count >= 15:
+                        long_sentence_count += 1
+                    if word_count >= 20:
+                        very_long_sentence_count += 1
 
                     # Track Chinese characters (still insert for analysis)
                     if contains_chinese(sentence):
@@ -315,11 +348,20 @@ def run(args_list):
     print("VALIDATION SUMMARY")
     print("="*50)
     print(f"JSON parsing failures: {json_failure_count}")
+    print(f"Duplicate sentences skipped: {duplicate_count}")
     print(f"Sentences with Chinese characters: {non_english_sentence_count}")
     print(f"Datasets affected by Chinese characters: {len(non_english_dataset_ids)}")
     if non_english_dataset_ids:
         sample_ids = list(non_english_dataset_ids)[:10]
         print(f"  Sample affected dataset_ids: {sample_ids}")
+
+    # Print sentence length distribution
+    print("\n" + "-"*50)
+    print("SENTENCE LENGTH DISTRIBUTION")
+    print("-"*50)
+    print(f"Total sentences: {total_sentence_count}")
+    print(f"Sentences with 15+ words: {long_sentence_count} ({100*long_sentence_count/max(1,total_sentence_count):.1f}%)")
+    print(f"Sentences with 20+ words: {very_long_sentence_count} ({100*very_long_sentence_count/max(1,total_sentence_count):.1f}%)")
 
     # Close the connection when completely finished
     conn.close()

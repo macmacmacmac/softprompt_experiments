@@ -269,7 +269,7 @@ def run(args_list=None):
                 })
 
                 # Save Elicitations using InSPEcT for this dataset
-                elicitation_save_dir = f"./inspect_results"
+                elicitation_save_dir = f"./inspect_results/inspect_soft_prompts"
                 os.makedirs(elicitation_save_dir, exist_ok=True)
 
                 df = pd.DataFrame(inspect_elicited_results)
@@ -280,8 +280,6 @@ def run(args_list=None):
     
     if summary_results:
         summary_df = pd.DataFrame(summary_results)
-        summary_save_dir = f"{elicitation_save_dir}/inspect_soft_prompts"
-        os.makedirs(summary_save_dir, exist_ok = True)
-        summary_csv_path = f"{summary_save_dir}/mapper_vs_inspect.csv"
+        summary_csv_path = f"{elicitation_save_dir}/mapper_vs_inspect.csv"
         summary_df.to_csv(summary_csv_path, index=False)
         print(f"\nSaved master summary with best metrics to: {summary_csv_path}")

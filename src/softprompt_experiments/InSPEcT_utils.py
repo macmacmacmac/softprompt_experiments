@@ -36,7 +36,7 @@ FEW_SHOT_EXAMPLES_DOD = [
 
 # Combination of All Layers for Patchscopes Experiment
 ALL_LAYER_COMBINATIONS = [
-    {"min_source": 0, "max_source": 30, "min_target": 0, "max_target": 30}
+    {"min_source": -1, "max_source": 30, "min_target": -1, "max_target": 30}
 ]
 
 

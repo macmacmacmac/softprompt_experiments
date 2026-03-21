@@ -13,7 +13,7 @@ def run(args_list):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db_path", type=str, default="./datasets/mapper_classification_datasets/classification_5k.sqlite")
+    parser.add_argument("--db_path", type=str, default="./datasets/mapper_classification_datasets/DoD_2_5k_Mistral.sqlite")
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
@@ -42,36 +42,36 @@ def clean_database(db_path):
     incomplete_dataset_ids = [row[0] for row in cursor.fetchall()]
     print(f"Found {len(incomplete_dataset_ids)} incomplete datasets out of the original 5500.")
 
-    # Delete the data from the bottom up to respect foreign keys
-    if incomplete_dataset_ids:
-        print("Scrubbing incomplete data from tables...")
+    # # Delete the data from the bottom up to respect foreign keys
+    # if incomplete_dataset_ids:
+    #     print("Scrubbing incomplete data from tables...")
         
-        for dataset_id in incomplete_dataset_ids:
-            print(f"Removing data related to dataset_id: {dataset_id}")
-            cursor.execute("DELETE FROM sentences WHERE dataset_id = ?", (dataset_id,))
-            cursor.execute("DELETE FROM keywords WHERE dataset_id = ?", (dataset_id,))
-            cursor.execute("DELETE FROM datasets WHERE dataset_id = ?", (dataset_id,))
+    #     for dataset_id in incomplete_dataset_ids:
+    #         print(f"Removing data related to dataset_id: {dataset_id}")
+    #         cursor.execute("DELETE FROM sentences WHERE dataset_id = ?", (dataset_id,))
+    #         cursor.execute("DELETE FROM keywords WHERE dataset_id = ?", (dataset_id,))
+    #         cursor.execute("DELETE FROM datasets WHERE dataset_id = ?", (dataset_id,))
             
-        conn.commit()
-        print("Successfully purged imperfect datasets.")
+    #     conn.commit()
+    #     print("Successfully purged imperfect datasets.")
     
-    # Verify the final count
-    cursor.execute("SELECT COUNT(DISTINCT dataset_id) FROM datasets")
-    remaining_datasets = cursor.fetchone()[0]
+    # # Verify the final count
+    # cursor.execute("SELECT COUNT(DISTINCT dataset_id) FROM datasets")
+    # remaining_datasets = cursor.fetchone()[0]
     
-    cursor.execute("SELECT COUNT(*) FROM sentences")
-    remaining_sentences = cursor.fetchone()[0]
+    # cursor.execute("SELECT COUNT(*) FROM sentences")
+    # remaining_sentences = cursor.fetchone()[0]
     
-    print(f"\nFinal Verified Stats:")
-    print(f"Perfect Datasets: {remaining_datasets}")
-    print(f"Total Sentences:  {remaining_sentences}")
+    # print(f"\nFinal Verified Stats:")
+    # print(f"Perfect Datasets: {remaining_datasets}")
+    # print(f"Total Sentences:  {remaining_sentences}")
     
-    # VACUUM to reclaim hard drive space
-    # Deleting rows in SQLite doesn't shrink the file size automatically.
-    # Vacuum rebuilds the B-Tree index and shrinks the file footprint.
-    print("\nVacuuming database to optimize size and indexing speed (this may take a minute)...")
-    cursor.execute("VACUUM")
-    conn.commit()
+    # # VACUUM to reclaim hard drive space
+    # # Deleting rows in SQLite doesn't shrink the file size automatically.
+    # # Vacuum rebuilds the B-Tree index and shrinks the file footprint.
+    # print("\nVacuuming database to optimize size and indexing speed (this may take a minute)...")
+    # cursor.execute("VACUUM")
+    # conn.commit()
     
     conn.close()
     print("Cleanup complete!")

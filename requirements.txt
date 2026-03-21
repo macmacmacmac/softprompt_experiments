@@ -10,6 +10,7 @@ anyio==4.12.0
 apache-tvm-ffi==0.1.8.post2
 astor==0.8.1
 attrs==25.4.0
+bitsandbytes==0.49.2
 blake3==1.0.8
 cachetools==7.0.1
 cbor2==5.8.0
@@ -175,6 +176,7 @@ tqdm==4.67.1
 transformers==4.57.3
 triton==3.5.1
 typer==0.24.1
+typer-slim==0.24.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzdata==2025.2

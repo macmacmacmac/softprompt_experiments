@@ -37,4 +37,4 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 # -----------------------------
 # Run the Job (Example: Python Script / Module)
 # -----------------------------
-python -u -m run_experiment --scripts soft_prompt_mapper.inference_InSPEcT_softprompts
+python -u -m run_experiment --scripts soft_prompt_mapper.classification_DoD_generator
