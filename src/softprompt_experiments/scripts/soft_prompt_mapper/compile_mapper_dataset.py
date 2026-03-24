@@ -21,19 +21,20 @@ def run(args_list):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db_path", type=str, default="./datasets/mapper_classification_datasets/classification_5k.sqlite")
-    parser.add_argument("--trained_soft_prompts_path", type=str, default="./trained_soft_prompts")
-    parser.add_argument("--train_dataset_path", type=str, default="./datasets/mapper_training_dataset/train_mapper_dataset.pt")
-    parser.add_argument("--val_dataset_path", type=str, default="./datasets/mapper_training_dataset/val_mapper_dataset.pt")
+    parser.add_argument("--db_path", type=str, default="./datasets/mapper_classification_datasets/DoD_2_5k_Mistral.sqlite")
+    parser.add_argument("--trained_soft_prompts_dir", type=str, default="./trained_soft_prompts")
+    parser.add_argument("--compiled_dataset_dir", type=str, default="./datasets/mapper_training_dataset")
     parser.add_argument("--seed", type=int, default=47)
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
     DB_PATH = args.db_path
-    TRAINED_SOFT_PROMPTS_PATH = args.trained_soft_prompts_path
-    TRAIN_DATASET_PATH = args.train_dataset_path
-    VAL_DATASET_PATH = args.val_dataset_path
+    TRAINED_SOFT_PROMPTS_DIR = args.trained_soft_prompts_dir
+    COMPILED_DATASET_DIR = args.compiled_dataset_dir
     SEED = args.seed
+
+    # Determine DB Name
+    DB_NAME = DB_PATH.split('/')[-1].split('.')[0]
 
     # Fetch all hard prompts from SQLite
     print(f"Connecting to database: {DB_PATH}...")
@@ -52,13 +53,13 @@ def run(args_list):
     compiled_data = []
     missing_count = 0
 
-    print(f"Scanning soft prompt directories in: {TRAINED_SOFT_PROMPTS_PATH}...")
+    print(f"Scanning soft prompt directories in: {TRAINED_SOFT_PROMPTS_DIR}/{DB_NAME}...")
 
     # For each dataset_id and its associated hard prompt in the Dataset Map    
     for dataset_id, hard_prompt in tqdm(dataset_map.items(), desc="Compiling Data"):
 
         # Construct a path to fetch to trained the prompts for the dataset_id 
-        soft_prompt_path = os.path.join(TRAINED_SOFT_PROMPTS_PATH, f"dataset_{dataset_id}", "softprompt.pt")
+        soft_prompt_path = os.path.join(TRAINED_SOFT_PROMPTS_DIR, DB_NAME, f"dataset_{dataset_id}", "softprompt.pt")
         
         # Skip if the soft prompt doesn't exist for the current dataset id
         if not os.path.exists(soft_prompt_path):
@@ -99,14 +100,16 @@ def run(args_list):
     val_data = compiled_data[split_idx:]
 
     # Create the Directory for saving the datasets
-    os.makedirs(os.path.dirname(TRAIN_DATASET_PATH), exist_ok=True)
+    os.makedirs(COMPILED_DATASET_DIR, exist_ok=True)
     
     # Save the Training and Validation Datasets
-    torch.save(train_data, TRAIN_DATASET_PATH)
-    torch.save(val_data, VAL_DATASET_PATH)
+    train_dataset_path = os.path.join(COMPILED_DATASET_DIR, 'train_mapper_dataset.pt')
+    val_dataset_path = os.path.join(COMPILED_DATASET_DIR, 'val_mapper_dataset.pt')
+    torch.save(train_data, train_dataset_path)
+    torch.save(val_data, val_dataset_path)
     
-    print(f"Saved Train Split ({len(train_data)} samples) to: {TRAIN_DATASET_PATH}")
-    print(f"Saved Val Split ({len(val_data)} samples) to: {VAL_DATASET_PATH}")
+    print(f"Saved Train Split ({len(train_data)} samples) to: {train_dataset_path}")
+    print(f"Saved Val Split ({len(val_data)} samples) to: {val_dataset_path}")
 
 
 
