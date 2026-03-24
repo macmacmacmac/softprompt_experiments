@@ -100,11 +100,11 @@ def run(args_list):
     val_data = compiled_data[split_idx:]
 
     # Create the Directory for saving the datasets
-    os.makedirs(COMPILED_DATASET_DIR, exist_ok=True)
+    os.makedirs(os.path.join(COMPILED_DATASET_DIR, DB_NAME), exist_ok=True)
     
     # Save the Training and Validation Datasets
-    train_dataset_path = os.path.join(COMPILED_DATASET_DIR, 'train_mapper_dataset.pt')
-    val_dataset_path = os.path.join(COMPILED_DATASET_DIR, 'val_mapper_dataset.pt')
+    train_dataset_path = os.path.join(COMPILED_DATASET_DIR, DB_NAME, 'train_mapper_dataset.pt')
+    val_dataset_path = os.path.join(COMPILED_DATASET_DIR, DB_NAME, 'val_mapper_dataset.pt')
     torch.save(train_data, train_dataset_path)
     torch.save(val_data, val_dataset_path)
     
