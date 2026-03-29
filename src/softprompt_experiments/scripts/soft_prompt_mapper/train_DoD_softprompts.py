@@ -140,7 +140,7 @@ def run(args_list):
     parser.add_argument("--epochs", type=int, default=6)
     parser.add_argument("--num_tokens", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--db_path", type=str, default="./datasets/mapper_classification_datasets/DoD_2_5k_Mistral.sqlite")
+    parser.add_argument("--db_path", type=str, default="./datasets/mapper_classification_datasets/DoD_2_5k_Mistral_transformed.sqlite")
     parser.add_argument("--save_dir", type=str, default="./trained_soft_prompts")
     parser.add_argument("--seed", type=int, default=47)
     args, _ = parser.parse_known_args(args_list)

@@ -130,7 +130,7 @@ def run(args_list=None):
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
     parser.add_argument("--inspect_soft_prompts_dir", type=str, default="./inspect_soft_prompts")
-    parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/DoD_2_5k_Mistral")
+    parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/DoD_2_5k_Mistral_transformed")
     parser.add_argument("--num_tokens", type=int, default=20)
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--inspect", action="store_true", help="Run InSPEcT technique for comparison")
@@ -221,6 +221,11 @@ def run(args_list=None):
                 if benchmark_key:
                     bench_data = INSPECT_BENCHMARKS[benchmark_key]
                     mapper_class_rate, mapper_rouge1 = calculate_inspect_metrics(pred_text, bench_data)
+                    
+                    # Print out the classes of this dataset
+                    print(f"Classes for {dataset_name}: {bench_data['classes']}")
+
+
                     print(f"Mapper Class Rate: {mapper_class_rate:.2f}")
                     print(f"Mapper Max ROUGE-1: {mapper_rouge1:.2f}\n")
                 else:
