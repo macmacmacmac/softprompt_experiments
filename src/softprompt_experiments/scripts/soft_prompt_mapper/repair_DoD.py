@@ -11,32 +11,21 @@ SENTENCE_GENERATION_SYSTEM_PROMPT = """
 You are an expert linguistic data generator creating training data for a classifier.
 
 TASK:
-Generate diverse text samples that describe, imply, or relate to the Target Keyword WITHOUT using that keyword.
+Generate diverse text samples that describe, imply, or relate to the Target Keyword WITHOUT using the keyword itself.
 
-LENGTH DISTRIBUTION (CRITICAL):
-- At least 4 sentences MUST be 20-35 words long (detailed, descriptive sentences)
-- 3-4 sentences should be medium length (10-19 words)
-- 2-3 sentences can be short phrases (3-9 words)
+STYLE & LENGTH DISTRIBUTION (CRITICAL):
+Mix the lengths and styles across your output to simulate varied human text:
+- Long (3-4 sentences): Elaborate, multi-clause thoughts, descriptive scenes, or storytelling snippets.
+- Medium (3-4 sentences): Complete thoughts with moderate detail.
+- Short (2-3 sentences): Punchy expressions, quick reactions, fragments, or rhetorical questions.
 
-REALISM REQUIREMENTS - Make text feel natural and messy:
-- Sometimes skip punctuation at sentence ends
-- Sometimes use improper punctuation (double periods.., misplaced commas, or missing commas)
-- Vary capitalization: some sentences start lowercase, occasional CAPS for emphasis
-- Include informal styles: contractions, fragments, trailing off...
-- Mix formality levels (casual chat vs professional tone)
+VARIETY REQUIREMENTS:
+- Include varied contexts: everyday life, technical, emotional, professional.
+- Mix formality levels: from casual conversational tones to highly professional statements.
 
-VARIETY REQUIREMENTS - Mix these styles:
-- Long detailed sentences (20-35 words): elaborate thoughts, multi-clause statements, storytelling snippets
-- Medium sentences (10-19 words): complete thoughts with some detail
-- Short phrases (3-9 words): punchy expressions, quick reactions
-- Incomplete thoughts: trailing off with "..."
-- Questions: rhetorical or conversational
-
-CONSTRAINTS:
+HARD CONSTRAINTS:
 1. NEVER use the target keyword, its root, or direct derivations.
-2. Every sentence must be UNIQUE - no repetition across outputs.
-3. Cover different contexts: everyday life, technical, emotional, professional
-4. Output ONLY the JSON - no explanations, no filler
+2. Every sentence must be conceptually UNIQUE.
 """
 
 
@@ -71,7 +60,7 @@ def run(args_list):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db_path", type=str, default="./datasets/mapper_classification_datasets/DoD_2_5k_Mistral.sqlite")
+    parser.add_argument("--db_path", type=str, default="./datasets/mapper_classification_datasets/DoD_3_5k.sqlite")
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
@@ -87,12 +76,12 @@ def repair_database(db_path):
     cursor = conn.cursor()
     print(f"Successfully Connected!")
 
-    # Constants matching the generator
+    # Constants
     TARGET_SENTENCES_PER_DATASET = 500
     NUM_KEYWORDS = 5
     TARGET_SENTENCES_PER_KEYWORD = TARGET_SENTENCES_PER_DATASET // NUM_KEYWORDS  # 100
     MAX_CHUNK_SIZE = 10
-    MIN_CHUNK_SIZE = 5  # Always request at least 5 sentences to avoid truncation issues
+    MIN_CHUNK_SIZE = 5
 
     # Identify all datasets that don't have exactly 500 sentences
     print('-' * 50)
@@ -127,19 +116,21 @@ def repair_database(db_path):
     tasks_by_size = {i: [] for i in range(MIN_CHUNK_SIZE, MAX_CHUNK_SIZE + 1)}
 
     for dataset_id, current_count in tqdm(incomplete_datasets, desc="Building repair tasks"):
+
         # Get keywords for this dataset with their current sentence counts
         cursor.execute("""
-            SELECT k.keyword_id, k.keyword, COUNT(s.sentence_id) as sentence_count
+            SELECT k.keyword_id, k.keyword, d.category, COUNT(s.sentence_id) as sentence_count
             FROM keywords k
+            JOIN datasets d ON k.dataset_id = d.dataset_id
             LEFT JOIN sentences s ON k.keyword_id = s.keyword_id AND s.dataset_id = k.dataset_id
             WHERE k.dataset_id = ?
-            GROUP BY k.keyword_id, k.keyword
+            GROUP BY k.keyword_id, k.keyword, d.category
         """, (dataset_id,))
 
         keyword_counts = cursor.fetchall()
 
-        # For each keyword_id, keyword and its sentence count
-        for keyword_id, keyword, count in keyword_counts:
+        # For each keyword_id, keyword, category and its sentence count
+        for keyword_id, keyword, category, count in keyword_counts:
 
             # Determine number of sentences needed to complete the dataset
             sentences_needed = TARGET_SENTENCES_PER_KEYWORD - count
@@ -152,10 +143,18 @@ def repair_database(db_path):
                 # Always request at least MIN_CHUNK_SIZE to avoid truncation issues
                 request_size = max(sentences_to_insert, MIN_CHUNK_SIZE)
 
+                # Construct user prompt
+                user_prompt = (
+                    f"Category Context: '{category}'.\n"
+                    f"Target Keyword: '{keyword}'.\n"
+                    f"Generate a JSON with {request_size} unique sentences that describe or relate to this specific keyword "
+                    f"within the context of the given category. Do NOT use the keyword itself."
+                )
+
                 # Construct messages
                 messages = [
                     {"role": "system", "content": SENTENCE_GENERATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Target Keyword: {keyword}. Generate a JSON with {request_size} unique sentences without using the keyword."}
+                    {"role": "user", "content": user_prompt}
                 ]
 
                 # Insert a task for current request size
@@ -195,7 +194,7 @@ def repair_database(db_path):
         tokenizer_mode="mistral",
         quantization="bitsandbytes",
         load_format="bitsandbytes",
-        max_model_len=119712,
+        max_model_len=4096,
         tensor_parallel_size=1,
         gpu_memory_utilization=0.9
     )
@@ -227,7 +226,7 @@ def repair_database(db_path):
         sampling_params = SamplingParams(
             temperature=0.4,
             presence_penalty=0.5,
-            max_tokens=1000,
+            max_tokens=2048,
             structured_outputs=StructuredOutputsParams(json=get_json_schema(request_size))
         )
 

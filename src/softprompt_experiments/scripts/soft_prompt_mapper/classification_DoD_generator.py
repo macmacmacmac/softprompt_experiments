@@ -9,37 +9,27 @@ from vllm import LLM, SamplingParams
 from vllm.sampling_params import StructuredOutputsParams
 import re
 from tqdm import tqdm
+import pickle
 
 SENTENCE_GENERATION_SYSTEM_PROMPT = """
 You are an expert linguistic data generator creating training data for a classifier.
 
 TASK:
-Generate diverse text samples that describe, imply, or relate to the Target Keyword WITHOUT using that keyword.
+Generate diverse text samples that describe, imply, or relate to the Target Keyword WITHOUT using the keyword itself.
 
-LENGTH DISTRIBUTION (CRITICAL):
-- At least 4 sentences MUST be 20-35 words long (detailed, descriptive sentences)
-- 3-4 sentences should be medium length (10-19 words)
-- 2-3 sentences can be short phrases (3-9 words)
+STYLE & LENGTH DISTRIBUTION (CRITICAL):
+Mix the lengths and styles across your output to simulate varied human text:
+- Long (3-4 sentences): Elaborate, multi-clause thoughts, descriptive scenes, or storytelling snippets.
+- Medium (3-4 sentences): Complete thoughts with moderate detail.
+- Short (2-3 sentences): Punchy expressions, quick reactions, fragments, or rhetorical questions.
 
-REALISM REQUIREMENTS - Make text feel natural and messy:
-- Sometimes skip punctuation at sentence ends
-- Sometimes use improper punctuation (double periods.., misplaced commas, or missing commas)
-- Vary capitalization: some sentences start lowercase, occasional CAPS for emphasis
-- Include informal styles: contractions, fragments, trailing off...
-- Mix formality levels (casual chat vs professional tone)
+VARIETY REQUIREMENTS:
+- Include varied contexts: everyday life, technical, emotional, professional.
+- Mix formality levels: from casual conversational tones to highly professional statements.
 
-VARIETY REQUIREMENTS - Mix these styles:
-- Long detailed sentences (20-35 words): elaborate thoughts, multi-clause statements, storytelling snippets
-- Medium sentences (10-19 words): complete thoughts with some detail
-- Short phrases (3-9 words): punchy expressions, quick reactions
-- Incomplete thoughts: trailing off with "..."
-- Questions: rhetorical or conversational
-
-CONSTRAINTS:
+HARD CONSTRAINTS:
 1. NEVER use the target keyword, its root, or direct derivations.
-2. Every sentence must be UNIQUE - no repetition across outputs.
-3. Cover different contexts: everyday life, technical, emotional, professional
-4. Output ONLY the JSON - no explanations, no filler
+2. Every sentence must be conceptually UNIQUE.
 """
 
 # Define the exact JSON schema we want vLLM to force the model to follow
@@ -80,32 +70,6 @@ def contains_chinese(text: str) -> bool:
     return bool(re.search(r'[\u4E00-\u9FFF\u3400-\u4DBF\u3000-\u303F]', text))
 
 
-def get_safe_keywords(target_pool_size = 15000, restrict_by_forbidden_vocab = True):
-    nltk.download('brown')
-
-    forbidden_vocab_set = FORBIDDEN_VOCAB_SET if restrict_by_forbidden_vocab else set()
-    
-    # Get standard nouns and adjectives
-    tagged_words = [(word.lower(), tag) for word, tag in brown.tagged_words()]
-    valid_words = [
-        word for word, tag in tagged_words 
-        if (tag.startswith('NN') or tag.startswith('JJ')) and word.isalpha()
-    ]
-    
-    # Filter by frequency to ensure the words are common enough for an LLM to understand
-    freq_dist = nltk.FreqDist(valid_words)
-    
-    safe_pool = []
-    for word, _ in freq_dist.most_common():
-        if word not in forbidden_vocab_set and len(word) > 3: # Skip tiny words
-            safe_pool.append(word)
-            
-        if len(safe_pool) >= target_pool_size:
-            break
-            
-    return safe_pool
-
-
 def setup_database(db_path):
     """Initializes the SQLite schema designed for PyTorch dataloading speed."""
     conn = sqlite3.connect(db_path)
@@ -114,6 +78,7 @@ def setup_database(db_path):
     cursor.executescript("""
         CREATE TABLE IF NOT EXISTS datasets (
             dataset_id INTEGER PRIMARY KEY,
+            category TEXT NOT NULL,
             hard_prompt TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS keywords (
@@ -153,16 +118,20 @@ def run(args_list):
     parser.add_argument("--mini_dataset_size", type=int, default=500)
     parser.add_argument("--num_of_datasets", type=int, default=5500)
     parser.add_argument("--save_directory", type=str, default="./datasets/mapper_classification_datasets")
-    parser.add_argument("--db_name", type=str, default="DoD_2_5k.sqlite")
+    parser.add_argument("--keyword_pickle_path", type=str, default="./datasets/mapper_classification_datasets/keywords_DoD3_10k_2.pkl")
+    parser.add_argument("--db_name", type=str, default="DoD_3_5k.sqlite")
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
-    # TEACHER_MODEL_NAME = "Qwen/Qwen2.5-32B-Instruct-AWQ"
     TEACHER_MODEL_NAME = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+    # TEACHER_MODEL_NAME = "OPEA/Mistral-Small-3.1-24B-Instruct-2503-int4-AutoRound-awq-sym"
+    # TEACHER_MODEL_NAME = "stelterlab/Mistral-Small-24B-Instruct-2501-AWQ"
     MINI_DATASET_SIZE = args.mini_dataset_size
     NUM_OF_DATASETS = args.num_of_datasets
     SAVE_DIRECTORY = args.save_directory
     DB_NAME = args.db_name
+    KEYWORD_PICKLE_PATH = args.keyword_pickle_path
+    VALID_CATEGORY_REGEX = r"^[a-zA-Z0-9\s_\-]+$"
 
     # Other variables
     NUM_KEYWORDS = 5
@@ -181,28 +150,80 @@ def run(args_list):
     os.makedirs(SAVE_DIRECTORY, exist_ok=True)
     conn, cursor = setup_database(db_path)
 
-    # Get all Safe Keywords (Nouns / Adjectives) from the Brown Corpus
-    safe_keywords = get_safe_keywords(restrict_by_forbidden_vocab=False)
+    # Load Existing Keywords
+    semantic_keyword_sets = set()
+    print(f"Loading keywords from {KEYWORD_PICKLE_PATH} ...")
+    try:
+        with open(KEYWORD_PICKLE_PATH, 'rb') as f:
+            semantic_keyword_sets = pickle.load(f)
+        print(f"Successfully loaded {len(semantic_keyword_sets)} existing unique categories.")
+    except Exception as e:
+        print(f"Error loading existing pickle file: {e}. Exiting ...")
+        exit(-1)
+
+    # Convert to list and predictably shuffle for ML reproducibility
+    keyword_list = sorted(list(semantic_keyword_sets))
+    random.seed(42) # Guarantees the exact same random sequence every run
+    random.shuffle(keyword_list)
+
+    # Find all keyword sets which are valid.
+    # Valid keyword sets are those which:
+    # - have 5 classes
+    # - have category comprised of alphanumeric and special characters
+    # - have target leakage
+    valid_keyword_sets = []
+    
+    for category, classes in keyword_list:
+        clean_category = category.strip().lower()
+        lower_classes = [c.lower() for c in classes]
+
+        # 1. Check for exactly 5 classes
+        if len(classes) != 5:
+            continue
+            
+        # 2. Check for Target Leakage
+        if clean_category in lower_classes:
+            continue
+
+        # 3. Check for valid english categories
+        if not re.search(VALID_CATEGORY_REGEX, clean_category):
+            continue
+            
+        # If it passes all checks, add it to our final generation queue!
+        valid_keyword_sets.append((clean_category, classes))
+
+        # Break as soon as we reach the requested number of datasets
+        if len(valid_keyword_sets) == NUM_OF_DATASETS:
+            break
+
+    if len(valid_keyword_sets) < NUM_OF_DATASETS:
+        print(f"Warning: Only found {len(valid_keyword_sets)} valid datasets out of requested {NUM_OF_DATASETS}.")
 
     # Maintain a Maps of mini-dataset -> keywords
     dod_keyword_maps = []
 
-    print("Initializing mini datasets in SQLite ...")
+    print("Initializing mini datasets, using loaded semantic keyword sets, in SQLite ...")
 
-    # For each mini dataset
-    for i in range(NUM_OF_DATASETS):
-        # Randomly sample NUM_KEYWORDS keywords from the keywords pool
-        keywords = tuple(random.sample(safe_keywords, NUM_KEYWORDS))
+    # For each keyword set
+    for i, (category, classes) in enumerate(valid_keyword_sets):
 
-        # Add the entry for dataset id and its associated keywords
+        # Sort to create a deterministic baseline
+        keywords = sorted(list(classes))
+        
+        # Seed with 'i' so every dataset shuffles differently, but predictably!
+        random.seed(42 + i) 
+        random.shuffle(keywords)
+
+        # Add the entry for dataset id and its associated category and keywords
         dod_keyword_maps.append({
             "dataset_id": i,
+            "category": category,
             "keywords": keywords
         })
 
         # Init a Hard Prompt for this mini dataset and insert it into the DB's datasets table
         hard_prompt = f"Classify the following sentence as: {', '.join(keywords)}"
-        cursor.execute("INSERT INTO datasets (dataset_id, hard_prompt) VALUES (?, ?)", (i, hard_prompt))
+        cursor.execute("INSERT INTO datasets (dataset_id, category, hard_prompt) VALUES (?, ?, ?)", (i, category, hard_prompt))
 
         # Insert keywords and related data into the keywords table
         for label_idx, kw in enumerate(keywords):
@@ -216,19 +237,27 @@ def run(args_list):
     llm = LLM(
         model = TEACHER_MODEL_NAME,
         tokenizer_mode = "mistral",
+        # tokenizer = "mistralai/Mistral-Small-24B-Instruct-2501",
         # quantization="awq",
+
         quantization="bitsandbytes",
         load_format="bitsandbytes",
-        max_model_len = 119712,
+        # max_model_len = 119712,
+
         tensor_parallel_size = 1,
-        gpu_memory_utilization = 0.9 # Let vLLM use 90% of GPU VRAM for KV Cache
+
+        enable_prefix_caching = True, 
+        max_model_len = 4096, 
+        max_num_seqs = 256,
+
+        gpu_memory_utilization = 0.95, # Let vLLM use 90% of GPU VRAM for KV Cache
     )
 
     # Setup SamplingParams for the vLLM along with a guided json schema for guided decoding
     sampling_params = SamplingParams(
         temperature = 0.4, 
         presence_penalty = 0.5,
-        max_tokens = 1000,
+        max_tokens = 2048,
         structured_outputs = StructuredOutputsParams(json = JSON_SCHEMA)
     )
 
@@ -237,6 +266,8 @@ def run(args_list):
     print("Creating prompts for sentence generation")
     for dataset in tqdm(dod_keyword_maps, desc="Creating Prompts"):
         dataset_id = dataset["dataset_id"]
+        category = dataset["category"]
+
         for kw in dataset["keywords"]:
             cursor.execute("SELECT keyword_id FROM keywords WHERE dataset_id = ? AND keyword = ?", (dataset_id, kw))
             keyword_id = cursor.fetchone()[0]
@@ -244,10 +275,18 @@ def run(args_list):
             # Chunking Strategy: Send multiple small requests instead of a massive one
             for _ in range(NUM_CHUNKS_PER_KEYWORD):
 
+                # Construct user prompt
+                user_prompt = (
+                    f"Category Context: '{category}'.\n"
+                    f"Target Keyword: '{kw}'.\n"
+                    f"Generate a JSON with {CHUNK_SIZE} unique sentences that describe or relate to this specific keyword "
+                    f"within the context of the given category. Do NOT use the keyword itself."
+                )
+
                 # Construct messages to be sent to the LLM
                 messages = [
                     {"role": "system", "content": SENTENCE_GENERATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Target Keyword: {kw}. Generate a JSON with {CHUNK_SIZE} unique sentences without using the keyword."}
+                    {"role": "user", "content": user_prompt}
                 ]
 
                 generation_tasks.append({

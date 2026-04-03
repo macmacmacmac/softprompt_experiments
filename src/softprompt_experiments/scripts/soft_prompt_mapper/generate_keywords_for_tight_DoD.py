@@ -7,6 +7,11 @@ from vllm import LLM, SamplingParams
 from vllm.sampling_params import StructuredOutputsParams
 import argparse
 from tqdm import tqdm
+import random
+import nltk
+from nltk.corpus import brown
+# from nltk.stem import WordNetLemmatizer
+# nltk.download('wordnet')
 
 # ┌───────────────────────────────────────────────┐
 # │             DEFINE THE JSON SCHEMA            │
@@ -29,6 +34,46 @@ class DatasetBatch(BaseModel):
 # Define the exact JSON schema we want vLLM to force the model to follow.
 JSON_SCHEMA = json.dumps(DatasetBatch.model_json_schema())
 
+# Hardcode the target classes from the InSPEcT paper
+FORBIDDEN_VOCAB_SET = {
+    # SST2 and SST5 Classes
+    "positive", "negative", "terrible", "bad", "neutral", "good", "great",
+
+    # AGNews Classes
+    "world", "sports", "business", "technology"
+
+    # Subj Classes
+    "objective", "subjective", 
+
+    # TREC Classes
+    "abbreviation", "entity", "description", "human", "location", "number"
+}
+
+def get_safe_keywords(target_pool_size = 15000, restrict_by_forbidden_vocab = True):
+    nltk.download('brown')
+
+    forbidden_vocab_set = FORBIDDEN_VOCAB_SET if restrict_by_forbidden_vocab else set()
+    
+    # Get standard nouns and adjectives
+    tagged_words = [(word.lower(), tag) for word, tag in brown.tagged_words()]
+    valid_words = [
+        word for word, tag in tagged_words 
+        if (tag.startswith('NN') or tag.startswith('JJ')) and word.isalpha()
+    ]
+    
+    # Filter by frequency to ensure the words are common enough for an LLM to understand
+    freq_dist = nltk.FreqDist(valid_words)
+    
+    safe_pool = []
+    for word, _ in freq_dist.most_common():
+        if word not in forbidden_vocab_set and len(word) > 3: # Skip tiny words
+            safe_pool.append(word)
+            
+        if len(safe_pool) >= target_pool_size:
+            break
+            
+    return safe_pool
+
 
 # Driver Code
 def run(args_list):
@@ -41,9 +86,9 @@ def run(args_list):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_of_datasets", type=int, default=5500)
-    parser.add_argument("--json_processing_batch_size", type=int, default=20)
-    parser.add_argument("--keyword_pickle_path", type=str, default="./datasets/mapper_classification_datasets/keywords_DoD3_5k.pkl")
+    parser.add_argument("--num_of_datasets", type=int, default=15_000)
+    parser.add_argument("--json_processing_batch_size", type=int, default=10)
+    parser.add_argument("--keyword_pickle_path", type=str, default="./datasets/mapper_classification_datasets/keywords_DoD3_10k_2.pkl")
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
@@ -56,11 +101,16 @@ def run(args_list):
     # │             LOAD EXISTING DATA                │
     # └───────────────────────────────────────────────┘
     semantic_dataset = set()
+    seen_categories = set()
     if os.path.exists(KEYWORD_PICKLE_PATH):
         print(f"Found existing pickle file at {KEYWORD_PICKLE_PATH}. Loading data...")
         try:
             with open(KEYWORD_PICKLE_PATH, 'rb') as f:
                 semantic_dataset = pickle.load(f)
+
+            for category, _ in semantic_dataset:
+                seen_categories.add(category.strip().lower())
+
             print(f"Successfully loaded {len(semantic_dataset)} existing unique categories.")
         except Exception as e:
             print(f"Error loading existing pickle file: {e}. Starting fresh.")
@@ -80,14 +130,13 @@ def run(args_list):
         quantization="bitsandbytes",
         load_format="bitsandbytes",
         max_model_len = 32768,
-        # max_model_len = 119712,
         tensor_parallel_size = 1,
         gpu_memory_utilization = 0.9 # Let vLLM use 90% of GPU VRAM for KV Cache
     )
 
     # Setup SamplingParams for vLLM with guided decoding via JSON schema.
     sampling_params = SamplingParams(
-        temperature = 1.0,
+        temperature = 0.5,
         max_tokens = 4096,
         structured_outputs = StructuredOutputsParams(json = JSON_SCHEMA)
     )
@@ -95,21 +144,43 @@ def run(args_list):
     # Create prompt structures.
     system_prompt = (
         "You are an expert Machine Learning dataset curator. Your task is to generate diverse, "
-        "semantically cohesive classification tasks. CRITICAL RULE: Every single class label "
-        "MUST be exactly ONE word. No spaces, no compound words, no exceptions."
+        "semantically cohesive classification tasks. CRITICAL RULES:\n"
+        "1. Every single class label MUST be exactly ONE word. No spaces, no hyphens.\n"
+        "2. Do NOT squish multi-word concepts together. If it requires two words (like 'Pad Thai'), DO NOT use it.\n"
+        "3. Every word MUST be a real, correctly spelled dictionary word or standard industry acronym."
     )
 
-    user_prompt = (
-        f"Generate exactly {JSON_PROCESSING_BATCH_SIZE} distinct classification categories. "
-        "Vary the domains wildly. Do not repeat categories. Remember: ONE WORD per class."
-    )
+    # user_prompt = (
+    #     f"Generate exactly {JSON_PROCESSING_BATCH_SIZE} distinct classification categories. "
+    #     "Vary the domains wildly. Do not repeat categories. Remember: ONE SINGLE, CORRECTLY SPELLED WORD per class."
+    # )
 
     # Build the list of chat requests. Each request asks for one JSON batch.
     num_prompts = NUM_OF_DATASETS // JSON_PROCESSING_BATCH_SIZE
     generation_tasks = []
 
+    # Generate a massive pool of 15,000 safe dictionary words
+    print("Generating NLTK lexical seeds...")
+    safe_pool = get_safe_keywords(restrict_by_forbidden_vocab=False)
 
     for _ in range(num_prompts):
+
+        # Sample 3 completely random, unrelated words from the dictionary
+        random_seeds = random.sample(safe_pool, 3)
+        seed_string = ", ".join(random_seeds)
+
+        # Use the random seed words as an abstract creative anchor
+        user_prompt = (
+            f"Generate exactly {JSON_PROCESSING_BATCH_SIZE} distinct classification categories. "
+            f"To ensure absolute diversity, use the following random seed words as abstract inspiration: '{seed_string}'. "
+            f"You do NOT need to use these specific words as categories. Instead, let their concepts, related industries, or themes guide your generation. "
+            f"CRITICAL RULES:\n"
+            f"1. You MUST NOT use the exact seed words as categories.\n"
+            f"2. Every single class label MUST be exactly ONE word. No spaces, no hyphens.\n"
+            f"3. Do NOT squish multi-word concepts together."
+        )
+
+
         generation_tasks.append({
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -142,11 +213,16 @@ def run(args_list):
             
             for item in parsed_data.get("datasets", []):
                 category = item['category']
-                clean_classes = [c.lower() for c in item['classes']]
-                classes_frozenset = frozenset(clean_classes)
-                
-                # Add to our master set (duplicates will automatically be ignored by the set logic)
-                semantic_dataset.add((category, classes_frozenset))
+                clean_category = category.strip().lower()
+
+                # Check if we have seen this category name before
+                if clean_category not in seen_categories:
+                    clean_classes = [c.lower() for c in item['classes']]
+                    classes_frozenset = frozenset(clean_classes)
+                    
+                    # Add to our master set (duplicates will automatically be ignored by the set logic)
+                    semantic_dataset.add((category, classes_frozenset))
+                    seen_categories.add(clean_category)
                 
         except json.JSONDecodeError as e:
             print(f"Warning: Skipped a JSON parse error: {e}")
@@ -154,7 +230,7 @@ def run(args_list):
 
     # Print some initial examples of keywords generated
     print("\nSample Generated Categories:")
-    for category, classes in list(semantic_dataset)[:5]:
+    for category, classes in list(semantic_dataset)[:10]:
         print(f"Category: {category}")
         print(f"Classes: {classes}\n")
 
