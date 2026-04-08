@@ -77,24 +77,23 @@ class InSPEcTClassificationDataset(Dataset):
         dataset[split] = dataset[split].select(range(max_examples)) \
             if len(dataset[split]) > max_examples else dataset[split]
         
-        # Fetch the Text from Text column and Labels from Label Column
         # Create a new column for input_text
-        dataset.map(
-            lambda row: {"input_text": f"Sentence: {row[text_column]} Label:"},
+        dataset[split] = dataset[split].map(
+            lambda batch: {"input_text": [f"Sentence: {text} Label:" for text in batch[text_column]]},
             batched = True,
             num_proc = 1
         )
 
         # Create a new column for target_text
-        dataset.map(
-            lambda row: {"target_text": f" {dataset_classes[row[label_column]]}"},
+        dataset[split] = dataset[split].map(
+            lambda batch: {"target_text": [f" {dataset_classes[label]}" for label in batch[label_column]]},
             batched = True,
             num_proc = 1
         )
 
-        self.inputs = dataset[split]["input_text"]
-        self.targets = dataset[split]["target_text"]
-
+        # Fetch the inputs and targets inputs
+        self.inputs = list(dataset[split]["input_text"])
+        self.targets = list(dataset[split]["target_text"])
 
 
 
@@ -345,6 +344,7 @@ def run(args_list):
             collate_fn = collator
         )
 
+        print(f"Successfully loaded dataset {dataset_name}!")
 
         # ┌───────────────────────────────────────────────┐
         # │               SOFT PROMPT INIT                │
