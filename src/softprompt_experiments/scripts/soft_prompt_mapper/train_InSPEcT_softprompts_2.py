@@ -94,41 +94,6 @@ class InSPEcTClassificationDataset(Dataset):
         # Fetch the inputs and targets inputs
         self.inputs = list(dataset[split]["input_text"])
         self.targets = list(dataset[split]["target_text"])
-
-
-
-    def _load_data_from_sqlite(self):
-        # Open a temporary connection just to fetch the data
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # We use an INNER JOIN to grab the sentence AND the actual keyword text in one jump.
-        # Thanks to the composite B-Tree index, this executes in < 1 millisecond.
-        query = """
-            SELECT s.sentence, k.keyword
-            FROM sentences s
-            JOIN keywords k ON s.keyword_id = k.keyword_id
-            WHERE s.dataset_id = ? AND s.split = ?
-        """
-        
-        cursor.execute(query, (self.dataset_id, self.split))
-        rows = cursor.fetchall()
-        
-        for sentence, keyword in rows:
-            # Format the input text so the LLM knows what to do
-            # (The soft prompt will be prepended to this later)
-            input_text = f"Sentence: {sentence} Label:"
-            
-            # Format the target text
-            target_text = f" {keyword}"
-            
-            self.inputs.append(input_text)
-            self.targets.append(target_text)
-            
-        conn.close()
-        
-
-
     
         if len(self.inputs) == 0:
             raise ValueError(f"No data found for dataset_id {self.dataset_id} (split: {self.split})")
@@ -235,8 +200,8 @@ def run(args_list):
 
 
     # Determine DEVICE and DTYPE
-    # DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    DEVICE = "cpu"
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    # DEVICE = "cpu"
     DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
 
     # Load Tokenizer
@@ -290,7 +255,7 @@ def run(args_list):
 
         # Init save dir
         dataset_name = dataset_id.split('/')[1]
-        save_dir = f"SAVE_DIR/{dataset_name}_{NUM_TOKENS}tokens"
+        save_dir = f"{SAVE_DIR}/{dataset_name}_{NUM_TOKENS}tokens"
 
         # Retrieve the configs for current dataset_id
         configs = INSPECT_DATASET_CONFIGS[dataset_id]
@@ -382,7 +347,7 @@ def run(args_list):
             # Set the soft prompt in training mode
             soft_prompt.train()
             
-            for batch in train_dataloader:
+            for batch in tqdm(train_dataloader, desc=f"Epoch {epoch + 1}/{epochs} [Train]"):
 
                 # Reset gradients
                 optimizer.zero_grad()
@@ -452,7 +417,7 @@ def run(args_list):
 
             # Freeze all weights
             with torch.no_grad():
-                for batch in val_dataloader:
+                for batch in tqdm(val_dataloader, desc=f"Epoch {epoch + 1}/{epochs} [Val]"):
 
                     # Move inputs to DEVICE
                     input_ids = batch["input_ids"].to(DEVICE)                                       # (batch_size, seq_len)
@@ -555,7 +520,7 @@ def run(args_list):
             training_stats['avg_train_loss'][idx] = round(best_train_loss, 4)
             training_stats['avg_val_loss'][idx] = round(best_val_loss, 4)
         else:
-            training_stats['dataset_id'].append(round(dataset_id, 4))
+            training_stats['dataset_id'].append(dataset_id)
             training_stats['train_accuracy'].append(round(best_train_accuracy, 4))
             training_stats['val_accuracy'].append(round(best_val_accuracy, 4))
             training_stats['avg_train_loss'].append(round(best_train_loss, 4))

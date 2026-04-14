@@ -130,7 +130,7 @@ def run(args_list=None):
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
     parser.add_argument("--inspect_soft_prompts_dir", type=str, default="./inspect_soft_prompts")
-    parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/DoD_3_5k")
+    parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/DoD_2_5k_Mistral")
     parser.add_argument("--num_tokens", type=int, default=20)
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--inspect", action="store_true", help="Run InSPEcT technique for comparison")
@@ -192,11 +192,19 @@ def run(args_list=None):
                 print(f"Performing Inference using soft prompts trained on {dataset_name}")
                 print("-" * 100)
 
-                # Load the Soft Prompts
-                soft_prompt = torch.load(os.path.join(root, soft_prompt_dir, 'softprompt.pt'))  # (soft_prompt_len, embed_dim)
+                # Construct soft prompt path
+                soft_prompt_path = os.path.join(root, soft_prompt_dir, 'softprompt.pt')
+
+                # # Load the saved state dict
+                # # weights_only=True is a PyTorch security best practice for loading tensors
+                state_dict = torch.load(soft_prompt_path, map_location = "cpu", weights_only = True)
+                
+                # Extract the prompt embeddings. 
+                # The SoftPrompt class saves it as shape (1, soft_prompt_len, embed_dim).
+                soft_prompt = state_dict['prompt_embeddings']
 
                 # Add batch dimension to the soft prompt
-                inputs_embeds = soft_prompt.unsqueeze(0).to(DEVICE, dtype = DTYPE)               # (1, soft_prompt_len, embed_dim)
+                inputs_embeds = soft_prompt.to(DEVICE, dtype = DTYPE)               # (1, soft_prompt_len, embed_dim)
 
                 # Create an attention mask of 1s for the soft_prompt_len tokens
                 attention_mask = torch.ones(inputs_embeds.shape[:2], dtype=torch.long, device=DEVICE) # (1, soft_prompt_len)
