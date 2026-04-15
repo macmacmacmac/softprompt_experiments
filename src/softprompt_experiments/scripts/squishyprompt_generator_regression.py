@@ -13,7 +13,10 @@ from tqdm.auto import tqdm
 
 import numpy as np
 
-from softprompt_experiments.models.softprompt import SoftPrompt
+from softprompt_experiments.models.squishyprompt import SquishyPrompt
+from softprompt_experiments.models.priors.GMM_prior import (
+    GMM_prior
+)
 from softprompt_experiments.utils import (
     get_train_test_from_tokenized, 
     train_softprompt_from_tokenized,
@@ -23,14 +26,10 @@ from softprompt_experiments.utils import (
 )
 
 from peft import PromptTuningInit, PromptTuningConfig, get_peft_model
+import logging
 
 def run(args_list):
     exp_name = os.path.basename(__file__)
-    print(
-        "="*100, "\n", 
-        f"\t\t\t\tRunning script: {exp_name}", "\n",
-        "="*100,"\n"
-    )
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--init", type=str, default=None)
@@ -38,7 +37,7 @@ def run(args_list):
     parser.add_argument("--epochs", type=int, default=6)
     parser.add_argument("--num_tokens", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--entropy_reg_constant", type=float, default=0.0)
+    parser.add_argument("--lambd", type=float, default=0.0)
     parser.add_argument("--no_auto_split",dest="auto_split",action="store_false")
     parser.set_defaults(auto_split=True)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset")
@@ -46,7 +45,7 @@ def run(args_list):
     parser.add_argument("--verbose", action="store_true", help="enable verbose logging")
     parser.set_defaults(verbose=False)
     parser.add_argument("--verbose_level", type=str, default='epoch')
-    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-2-7b-hf")
     
     args, _ = parser.parse_known_args(args_list)
     
@@ -61,10 +60,42 @@ def run(args_list):
     NUM_TOKENS = args.num_tokens
     BATCH_SIZE = args.batch_size
     SEED = args.seed
-    ENTROPY_REG_CONSTANT = args.entropy_reg_constant
+    LAMBD = args.lambd
 
-    print("VERBOSE: ", VERBOSE)
-    print("AUTO_SPLIT: ", AUTO_SPLIT)
+    logging.getLogger().setLevel(logging.WARNING)
+
+    logger = logging.getLogger(f"{exp_name}")
+    logger.setLevel(logging.DEBUG)
+
+    if not logger.handlers:
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(
+            # logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            logging.Formatter("%(message)s")
+        )
+
+        # File handler
+        file_handler = logging.FileHandler(os.path.join(SAVE_DIR,f"{exp_name}.log"), mode="w")
+        file_handler.setFormatter(
+            # logging.Formatter("%(levelname)s - %(message)s")
+            logging.Formatter("%(message)s")
+        )
+        file_handler.flush = file_handler.stream.flush
+
+        logger.addHandler(console_handler)
+        logger.addHandler(file_handler)
+
+    logger.propagate = False
+
+    # logging.getLogger("transformers").setLevel(logging.INFO)
+    # logging.getLogger("torch").setLevel(logging.INFO)
+
+    logger.info(
+        f"{'='*100}\n\t\t\t\tRunning script: {exp_name}\n{'='*100}"
+    )
+
+    logger.info("Args: %s", vars(args))    
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
@@ -86,19 +117,24 @@ def run(args_list):
                 dataset_dirs.append(entry.path)
 
     num_datasets = len(dataset_dirs)
+    dataset_dirs = [
+        os.path.join(SAVE_DIR, f"dataset_{i}")
+        for i in range(num_datasets)
+    ]
     if num_datasets > 0:
-        print(f"\nFound ({num_datasets}) datasets in directory")
+        logger.info(f"\nFound ({num_datasets}) datasets in directory")
     else:
         raise ValueError("path to directory has no datasets")
 
     for dataset_dir in tqdm(dataset_dirs):
         # load dataset
-        train_dataset, test_dataset, train_loader, test_loader = get_train_test_from_tokenized(
+        _, test_dataset, train_loader, test_loader = get_train_test_from_tokenized(
             dataset_dir,
             BATCH_SIZE,
             train_portion = 0.8,
             auto_split=AUTO_SPLIT
         )
+        del _
 
         # initialize softprompt
         if SEED is not None:
@@ -111,13 +147,15 @@ def run(args_list):
         else:
             init = INIT
         
-        # print("Initial tokens: ", init)
-        softprompt = SoftPrompt(
+        # logger.info("Initial tokens: ", init)
+        logits_prior = GMM_prior()
+        squishyprompt = SquishyPrompt(
+            logits_prior=logits_prior,
             model=model, 
             init=init,
             tokenizer=tokenizer, 
             word_embeddings=word_embeddings, 
-            num_tokens=NUM_TOKENS
+            num_tokens=NUM_TOKENS,
         )
 
         if AUTO_SPLIT:
@@ -134,19 +172,17 @@ def run(args_list):
         
         # begin training
         if VERBOSE:
-            print(hardprompt)
+            logger.info(hardprompt)
         train_loss, test_loss, entropy = train_softprompt_from_tokenized(
-            softprompt, LR, EPOCHS, train_loader, test_loader, 
+            squishyprompt, LR, EPOCHS, train_loader, test_loader, 
             verbose=VERBOSE, verbose_level=VERBOSE_LEVEL,
-            entropy_reg_constant=ENTROPY_REG_CONSTANT
+            entropy_reg_constant=LAMBD, logger=logger
         )
-
-
 
         # if verbose: generate sample output predictions using eval_softprompt
         if VERBOSE:
-            outputs = eval_softprompt_regression(softprompt, test_dataset, dataset_dir)
-            print(outputs)
+            outputs = eval_softprompt_regression(squishyprompt, test_dataset, dataset_dir)
+            logger.info(outputs)
             performance = {
                 'hardprompt':hardprompt,
                 'train loss':train_loss,
@@ -164,12 +200,10 @@ def run(args_list):
             }
             log_json(os.path.join(dataset_dir,'softprompt_performance.json'), performance)
 
-        softprompt.save_softprompt(dataset_dir)
+        squishyprompt.save_softprompt(dataset_dir)
 
-    print(
-        "\n","="*100, "\n", 
-        f"\t\t\t\tCompleted script: {exp_name}", "\n",
-        "="*100,
+    logger.info(
+        f"{'='*100}\n\t\t\t\tCompleted script: {exp_name}\n{'='*100}"
     )
 
 

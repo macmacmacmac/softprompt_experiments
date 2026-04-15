@@ -66,10 +66,14 @@ class SoftPrompt(nn.Module):
     def forward(self):
         return self.prompt_embeddings.unsqueeze(0)  # [1, num_tokens, embed_dim]
 
-    def loss_fn(self, input_embeds, labels, return_entropy=False):
+    def loss_fn(self, input_embeds, attention_mask, labels, return_entropy=False):
+        """
+            Loss function for training soft prompts. This implementation
+            also returns entropy computed over the supervised sequence
+        """
         outputs = self._model(
             inputs_embeds=input_embeds,
-            attention_mask=None,   # fully causal
+            attention_mask=attention_mask,   # fully causal
             labels=labels          # HF computes CE internally
         )
 

@@ -22,9 +22,10 @@ def run(args_list):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--save_directory", type=str, default="./datasets/human_or_ai_dataset")
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
     args, _ = parser.parse_known_args(args_list)
     
-    MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+    MODEL_NAME = args.model_name
     # NUM_DATASETS = args.num_datasets
     SAVE_DIR = args.save_directory
 
@@ -53,7 +54,7 @@ def run(args_list):
         save_dir, 
         "human or ai", 
         tokenizer, 
-        input_max_length=128, 
+        input_max_length=32, 
         target_max_length=4
     )
 

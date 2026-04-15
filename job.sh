@@ -2,7 +2,7 @@
 #SBATCH -N 1                    
 #SBATCH -n 1
 #SBATCH -c 1 
-#SBATCH --mem=8g                
+#SBATCH --mem=24g                
 #SBATCH -J "llm softprompt job"    
 #SBATCH -p short                
 #SBATCH -t 60          

@@ -26,6 +26,8 @@ import json
 import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_fscore_support
 
+from logging import Logger
+
 def log_json(save_dir, data):
     with open(save_dir, 'w') as f:
         json.dump(data, f, indent=4) # indent for pretty printing
@@ -46,7 +48,12 @@ def tokenize_and_save(
     label_masks = []
     for inp_idxs, full_idxs in zip(tokenized_inp['input_ids'], tokenized_full['input_ids']):
         label_mask = copy.deepcopy(full_idxs)
-        label_mask[:len(inp_idxs)] = -100
+        label_mask[:len(inp_idxs)+1] = -100
+
+        # pad token mask
+        padding_token_positions = label_mask==tokenizer.pad_token_id
+        label_mask[padding_token_positions] = -100
+
         label_masks.append(label_mask)
     tokenized_full['labels'] = torch.stack(label_masks, dim=0)
 
@@ -575,7 +582,8 @@ def train_softprompt_from_tokenized(
     test_loader: DataLoader,
     verbose: bool = False,
     verbose_level: str = 'epoch',
-    entropy_reg_constant: float = 0.0
+    entropy_reg_constant: float = 0.0,
+    logger: Logger = None
 ):
     """
     Trains a softprompt from a dataset of tokenized sequences
@@ -607,12 +615,11 @@ def train_softprompt_from_tokenized(
         softprompt.train()
         train_loss = 0.0
         for i, batch in enumerate(tqdm(train_loader) if verbose_level=='batch' else train_loader):
-            print("I made it inside the training loop")
             input_ids, labels = [b.to(device) for b in batch]
             batchsize = input_ids.size(0)
+
             # softprompt embeddings
             sp_embeds = softprompt.forward()   # [1, soft_len, dim]
-            print("i managed to get sp_embeds")
             sp_embeds = sp_embeds.expand(batchsize, -1, -1) #[batchsize, soft_len, dim]
             input_embeds = word_embeddings(input_ids).to(dtype=dtype)
             full_embeds = torch.cat([sp_embeds, input_embeds], dim=1)
@@ -626,9 +633,18 @@ def train_softprompt_from_tokenized(
             )
             labels_adjusted = torch.cat([pad_prefix, labels], dim=1)
 
+            # build and shift attention mask
+            attention_mask = (input_ids != tokenizer.pad_token_id).long()
+            attn_prefix = torch.ones(
+                (labels.shape[0], sp_embeds.shape[1]),
+                dtype=labels.dtype,
+                device=device
+            )
+            attention_mask = torch.cat([attn_prefix, attention_mask], dim=1)
+
             # HF autoregressive LM loss
-            loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, return_entropy=True)
-            loss = loss + entropy_reg_constant*F.relu(1.0 - batch_entropy)
+            loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, attention_mask, return_entropy=True)
+            loss = loss - entropy_reg_constant*batch_entropy
 
             loss.backward()
             optimizer.step()
@@ -637,7 +653,10 @@ def train_softprompt_from_tokenized(
             train_loss += loss.item()
             if verbose and verbose_level == 'batch':
                 if i%36 == 0:
-                    print(f"Batch:{i}, train_loss: {loss}, entropy: {batch_entropy}")
+                    if logger:
+                        logger.info(f"Batch:{i}, train_loss: {loss}, entropy: {batch_entropy}")
+                    else:
+                        print(f"Batch:{i}, train_loss: {loss}, entropy: {batch_entropy}")
             
         # ---- evaluation ----
         softprompt.eval()
@@ -663,18 +682,35 @@ def train_softprompt_from_tokenized(
                     )
                     labels_adjusted = torch.cat([pad_prefix, labels], dim=1)
 
-                    loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, return_entropy=True)
+                    # build and shift attention mask
+                    attention_mask = (input_ids != tokenizer.pad_token_id).long()
+                    attn_prefix = torch.ones(
+                        (labels.shape[0], sp_embeds.shape[1]),
+                        dtype=labels.dtype,
+                        device=device
+                    )
+                    attention_mask = torch.cat([attn_prefix, attention_mask], dim=1)
+
+                    loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, attention_mask, return_entropy=True)
                     test_loss += loss.item()
                     entropy.append(batch_entropy.item())
                 entropy = sum(entropy)/len(entropy)
                 final_train_loss = train_loss/len(train_loader)
-                final_test_loss = test_loss/len(test_loader)        
-                print(
-                    f"Epoch {epoch+1}/{epochs} | "
-                    f"Train Loss: {final_train_loss:.4f} | "
-                    f"Test Loss: {final_test_loss:.4f} | "
-                    f"Entropy: {entropy}"
-                )
+                final_test_loss = test_loss/len(test_loader)  
+                if logger:
+                    logger.info(                    
+                        f"Epoch {epoch+1}/{epochs} | "
+                        f"Train Loss: {final_train_loss:.4f} | "
+                        f"Test Loss: {final_test_loss:.4f} | "
+                        f"Entropy: {entropy}"
+                    )
+                else:
+                    print(
+                        f"Epoch {epoch+1}/{epochs} | "
+                        f"Train Loss: {final_train_loss:.4f} | "
+                        f"Test Loss: {final_test_loss:.4f} | "
+                        f"Entropy: {entropy}"
+                    )
     with torch.no_grad():
         entropy = []
         for batch in test_loader:
@@ -695,7 +731,17 @@ def train_softprompt_from_tokenized(
             )
             labels_adjusted = torch.cat([pad_prefix, labels], dim=1)
 
-            loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, return_entropy=True)
+            # build and shift attention mask
+            attention_mask = (input_ids != tokenizer.pad_token_id).long()
+            attn_prefix = torch.ones(
+                (labels.shape[0], sp_embeds.shape[1]),
+                dtype=labels.dtype,
+                device=device
+            )
+            attention_mask = torch.cat([attn_prefix, attention_mask], dim=1)
+            # print(f"after shifting attention mask: {attention_mask}")
+
+            loss, batch_entropy = softprompt.loss_fn(full_embeds, labels_adjusted, attention_mask, return_entropy=True)
             test_loss += loss.item()
             entropy.append(batch_entropy.item())
         entropy = sum(entropy)/len(entropy)

@@ -35,91 +35,47 @@ def run(args_list):
 
     # generate dataset
     formulas = [
-        {   #gravitational force between two objects
-            'expr': "(6.673e-11) * (x*y)/(z**2)",
-            'input_template': "Input: m1={x},m2={y},r={z}\n Answer: ",
-            'output_template': "{out:.3e} N"
+        { 
+            'expr': "(x + y + z)", #sum
+            'high':10,
+            'input_template': "Input: x={x},y={y},z={z}\n Answer: ",
+            'output_template': "{out}"
         },
-        {
-            #circular orbital velocity
-            'expr': "((6.673e-11) * x / y)**0.5",
-            'input_template': "Input: M={x}, r={y}\n Answer: ",
-            'output_template': "{out:.3e} m/s"
+        { 
+            'expr': "(x + y)*z", # multi step
+            'high':10,
+            'input_template': "Input: x={x},y={y},z={z}\n Answer: ",
+            'output_template': "{out}"
         },
-        {
-            #scpacetime interval
-            'expr': "(x * 2.998e8)**2 - (y)**2 - (z)**2",
-            'input_template': "Input: dt={x}, dx={y}, dy={z}\n Answer: ",
-            'output_template': "{out:.3e}"
+        { 
+            'expr': "int((x**2 + y**2 + z**2)**(1/2))", #rounded magnitude of vector
+            'high':10,
+            'input_template': "Input: x={x},y={y},z={z}\n Answer: ",
+            'output_template': "{out}"
         },
-        {
-            #relative energy
-            'expr': "((1 / (1 - (y**2)/(2.998e8)**2)**0.5) - 1) * x * (2.998e8)**2",
-            'input_template': "Input: m={x},v={y}\n Answer: ",
-            'output_template': "{out:.3e} J"
+        { 
+            'expr': "(min(x,y,z))", #min
+            'high':10,
+            'input_template': "Input: x={x},y={y},z={z}\n Answer: ",
+            'output_template': "{out}"
         },
-        {
-            #attraction between two charges
-            'expr': "(8.99e9) * (x*y)/(z**2)",
-            'input_template': "Input: q1={x},q2={y},r={z}\n Answer: ",
-            'output_template': "{out:.3e} N"
-        },
-        {
-            #electric potential energy
-            'expr': "(8.99e9) * (x*y)/z",
-            'input_template': "Input: q1={x},q2={y},r={z}\n Answer: ",
-            'output_template': "{out:.3e} J"
-        },
-        {
-            #number of particles from mass
-            'expr': "(6.022e23) * x/y",
-            'input_template': "Input: m={x}, M={y}\n Answer: ",
-            'output_template': "{out:.3e} particles"
-        },
-        {
-            #faraday constant definition
-            'expr': "(x * 1e24/ 6.022e23) * y",
-            'input_template': "Input: N={x}, M={y}\n Answer: ",
-            'output_template': "{out:.3e} g"
-        },
-        {
-            #kinetic energy
-            'expr': "0.5*x*(y**2)",
-            'input_template': "Input: m={x},v={y}\n Answer: ",
-            'output_template': "{out:.3e} J"
-        },
-        {
-            # Wave speed
-            'expr': "x*y",
-            'input_template': "Input: f={x},λ={y}\n Answer: ",
-            'output_template': "{out:.3e} m/s"
-        },
-        {
-            # Ideal gas law
-            'expr': "(8.3145) * y * z / x",
-            'input_template': "Input: P={x},n={y},T={z}\n Answer: ",
-            'output_template': "{out:.3e} m³"
-        },
-        {
-            #volume of an ellipsoid ish
-            'expr': "(4/3)*3.1415*x*y*z",
-            'input_template': "Input: a={x},b={y},c={z}\n Answer: ",
-            'output_template': "{out:.3f}"
+        { 
+            'expr': "(max(x,y,z))", #max
+            'high':10,
+            'input_template': "Input: x={x},y={y},z={z}\n Answer: ",
+            'output_template': "{out}"
         },
     ]
     def expr_to_func(expr):        
         func = np.vectorize(lambda x, y, z: eval(expr))
         return func, expr
 
-    def get_sentences_from_func(func, input_template, output_template, num_samples, num_vars):
+    def get_sentences_from_func(func, input_template, output_template, high, num_samples):
         # x = np.random.randint(low=1, high=1000, size=num_samples)
         # y = np.random.randint(low=1, high=1000, size=num_samples)
         # z = np.random.randint(low=1, high=1000, size=num_samples)
 
         triples = set()
-
-        # high = 10 if num_vars > 2 else 100
-        high = 100
 
         while len(triples) < num_samples:
             triple = (
@@ -138,7 +94,10 @@ def run(args_list):
             for x,y,z in zip(x,y,z)
         ]
 
-        target_sentences = [output_template.format(out=out) for out in outputs]
+        target_sentences = [
+            output_template.format(out=out) 
+            for out in outputs
+        ]
 
         return input_sentences, target_sentences
 
@@ -150,17 +109,18 @@ def run(args_list):
         expr = formula['expr']
         input_template = formula['input_template']
         output_template = formula['output_template']
+        high = formula["high"]
         func, expr = expr_to_func(expr)
         num_vars = ("x" in expr) + ("y" in expr) + ("z" in expr)
         input_sentences, target_sentences = get_sentences_from_func(
-            func, input_template, output_template, NUM_SAMPLES_PER, num_vars
+            func, input_template, output_template, high, NUM_SAMPLES_PER
         )
         
         print(input_sentences[0], target_sentences[0])
 
         tokenized = tokenize_and_save(input_sentences, target_sentences, save_dir, expr, tokenizer)
 
-        for idx in range(5):
+        for idx in range(3):
             labels = tokenized['labels'][idx]
             full_ids = tokenized['input_ids'][idx]
             mask = (labels==-100)
@@ -169,6 +129,8 @@ def run(args_list):
             tokenized_text = full_ids[mask]
             tokenized_label = full_ids[antimask]
 
+            print(f"Input tokens len: {len(tokenized_text)}")
+            print(f"Label tokens len: {len(tokenized_label)}")
             input_text = tokenizer.decode(tokenized_text)
             label_text = tokenizer.decode(tokenized_label)
 
