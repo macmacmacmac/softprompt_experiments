@@ -47,7 +47,7 @@ class Inversion_Prior(logit_priors.LogitPrior):
     def sample_z_prime_from_q(
             self, 
             x_z: BaseModelOutput, 
-            attention_mask: torch.Tensor
+            x_z_attn_mask: torch.Tensor
         ):
         """
         Samples a z' ~ q(z'|x,z)
@@ -56,7 +56,7 @@ class Inversion_Prior(logit_priors.LogitPrior):
             # auto regressively generates z prime
             z_prime = self.inversion_model.generate_from_output(
                 x_z,
-                attention_mask,
+                x_z_attn_mask,
                 self.gen_kwargs
             )[0]
             # decoded = self.inversion_model.tokenizer.batch_decode(
@@ -69,12 +69,12 @@ class Inversion_Prior(logit_priors.LogitPrior):
             self,
             z_prime: torch.Tensor, 
             x_z: BaseModelOutput, 
-            attention_mask: torch.Tensor
+            x_z_attn_mask: torch.Tensor
         ):
         """
         Computes log q(z'|x,z)
         """
-        outputs = self.inversion_model(x_z, z_prime, attention_mask)
+        outputs = self.inversion_model(x_z, z_prime, x_z_attn_mask)
         
         # HF logits are shifted left like [b^,c^,d^,next_token^]
         logits = outputs.logits[:, :-1]
@@ -95,7 +95,7 @@ class Inversion_Prior(logit_priors.LogitPrior):
     def log_p_y_x_z_prime(
         self,
         z_prime: torch.Tensor,
-        x_y: torch.Tensor,
+        z_x_y: torch.Tensor,
         attention_mask: torch.tensor,
         labels: torch.Tensor,
     ):
@@ -109,7 +109,38 @@ class Inversion_Prior(logit_priors.LogitPrior):
         )
         
         return output.loss
-        
+    
+    def build_batch(
+        self,
+        z_prime: torch.Tensor,
+        z_x_y: torch.Tensor,
+        attn_mask_z_x_y: torch.tensor,
+        labels_z_x_y: torch.Tensor,
+    ):
+        """
+            z_prime: tokens in T5 token space [B,T_z',V]
+            z_x_y: tokens of softprompt+input+output in llama space, 
+                 passed through word_embeddings [B, T_sp+T_xy, D]
+            attention_mask: attention mask for input embeds
+                            [B, T_sp+T_xy, V]
+            labels: labels [B, T_sp+T_xy]
+        """
+        #1) decode z_prime into NL and retokenize it into Llama tokenspace
+        #   then embed it
+        decoded_z_prime = self.inversion_model.tokenizer.batch_decode(
+            z_prime,
+            skip_special_tokens=True
+        )
+        z_prime_llama = self.base_tokenizer(
+            decoded_z_prime,
+            padding='longest', 
+            return_tensors='pt',
+        )
+        attn_mask_z_prime = (z_prime_llama != self.base_tokenizer.pad_token_id).long()
+        z_prime_embs = self.word_embeddings(z_prime_llama)
+
+        #2) prep x_y
+        x_y
 
     """
         Log_prob v1:

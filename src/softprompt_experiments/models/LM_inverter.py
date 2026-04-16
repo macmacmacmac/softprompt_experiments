@@ -152,6 +152,7 @@ class LM_inverter(InversionFromLogitsEmbModel):
         labels: torch.Tensor, 
         attention_mask: torch.Tensor,
     ):
+        # attention mask just here to tell us where the last valid token is
         processed_embeddings = self._process_embedder_output(model_outputs, attention_mask)
         inputs_embeds, attention_mask = self.project_embedding(processed_embeddings)
 
