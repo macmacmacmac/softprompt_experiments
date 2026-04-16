@@ -1,7 +1,7 @@
 import os
 import argparse
 from datasets import Dataset, DatasetDict
-from typing import List, Dict
+from typing import List
 import json
 from tqdm import tqdm
 
