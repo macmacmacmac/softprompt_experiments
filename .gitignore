@@ -1,0 +1,34 @@
+# Ignore everything by default
+*
+
+# Allow directories so Git can descend
+!*/
+
+# Whitelist src folder and its Python files
+!src/
+!src/**/*.py
+
+# Whitelist specific files in project root
+!run_experiment.py
+!job.sh
+!pyproject.toml
+!requirements.txt
+!.gitignore
+!run_job.sh
+
+# Ignore all Python cache files everywhere
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore virtual environments
+venv/
+.env/
+.venv/
+
+# Ignore datasets
+datasets/
+visualizations/
+
+# Ignore .egg-info related folders for version control
+*.egg-info

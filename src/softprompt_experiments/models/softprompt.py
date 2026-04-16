@@ -20,42 +20,83 @@ class SoftPrompt(nn.Module):
     def __init__(self, model=None, init=None, tokenizer=None, word_embeddings=None, path_to_model=None, num_tokens=8):
         super().__init__()
 
+        # Register tokenizer, model and word_embedddings matrix as class instance variables without being
+        # directly registered as child modules to avoid tight coupling of object of SoftPrompt class and these
+        # during training.
         object.__setattr__(self, "_tokenizer", tokenizer)
         object.__setattr__(self, "_model", model)
         object.__setattr__(self, "_word_embeddings", word_embeddings)
 
+        # Member Variables
         self.num_tokens = num_tokens
-
         self.prompt_embeddings = None
         self.initial_tokens = None
         self.initial_embeddings = None
 
+        # If the Soft Prompt does not need to be initialized with Pre-Trained weights
         if path_to_model is None:
-            # initialize embeddings
+
+            # Get the Vocabulary Size
             vocab_size = word_embeddings.num_embeddings
+
+            # If init text is provided
             if init is not None:
+
+                # Tokenize init without special tokens
                 init_text = init
                 init_token_ids = tokenizer(init_text, add_special_tokens=False)["input_ids"]
-                # Trim or iterate until num_text_tokens matches total_virtual_tokens
+
+                # Calculate the total num of text tokens
                 num_text_tokens = len(init_token_ids)
+
+                # If num of text tokens greater than num of soft prompt tokens
                 if num_text_tokens > num_tokens:
+
+                    # Then trim the text tokens to the size of num of soft prompt tokens
                     init_token_ids = init_token_ids[:num_tokens]
+
+                # If num of text tokens is less than num of soft prompt tokens
                 elif num_text_tokens < num_tokens:
+
+                    # Find number of times to repeat the token ids
                     num_reps = math.ceil(num_tokens / num_text_tokens)
+
+                    # Repeat the token ids until its equivalent to the number of soft prompt tokens
                     init_token_ids = init_token_ids * num_reps
+
+                # Perform the trimming again just to be certain that the token ids do not exceed num of soft prompt tokens
                 init_token_ids = init_token_ids[:num_tokens]
+
+                # Convert the token ids to a Long Tensor
+                # and move to the same device as word embedding matrix
                 init_token_ids = torch.LongTensor(init_token_ids).to(word_embeddings.weight.device)
+            
+            # If Random Init is requested
             else:
+
+                # Randomly sample "num_tokens" token_ids from the vocab
                 init_token_ids = torch.randint(
-                    0,vocab_size,(self.num_tokens,), dtype=torch.long
+                    0, vocab_size,(self.num_tokens,), dtype=torch.long
                 ).to(model.device)
+
+            # Compute embeddings for init_token_ids
             word_embedding_weights = word_embeddings(init_token_ids).detach().clone().to(model.dtype)
+
+            # Create a Module Parameter using the computed token embeddings
             self.prompt_embeddings = nn.Parameter(word_embedding_weights.to(model.device))
+
+            # Keep copies of initial token ids and token embeddings
             self.initial_tokens = copy.deepcopy(init_token_ids)
             self.initial_embeddings = copy.deepcopy(word_embedding_weights)
+
+        # If a path to pretrained soft prompts are provided
         else:
+            
+            # Init a SoftPrompt instance using the pretrained soft prompts path
             self.load_softprompt(path_to_model)
 
+
+    # NOTE: Unused code?
     def set_prompt_embeddings(self, new):
         if len(new.shape) == 2:
             with torch.no_grad():
@@ -63,8 +104,10 @@ class SoftPrompt(nn.Module):
         else:
             raise ValueError(f"new prompt embeddings must be of shape [num_tokens, dim], found: {new.shape}")
     
+
     def forward(self):
         return self.prompt_embeddings.unsqueeze(0)  # [1, num_tokens, embed_dim]
+
 
     def loss_fn(self, input_embeds, labels, return_entropy=False):
         outputs = self._model(
@@ -94,6 +137,7 @@ class SoftPrompt(nn.Module):
 
         return outputs.loss, entropy    
     
+
     def generate_from_embeds(self, embeds=None, max_new_tokens=20, do_sample=True, suffix_str=None):
         """
         Generate text given softprompt embeddings.
@@ -142,6 +186,7 @@ class SoftPrompt(nn.Module):
         )
         return output
 
+
     def save_softprompt(self, path_to_save):
         state_dict = {
             'prompt_embeddings':self.forward(),
@@ -151,6 +196,7 @@ class SoftPrompt(nn.Module):
         }
         torch.save(state_dict, os.path.join(path_to_save, "softprompt.pt"))
     
+
     def load_softprompt(self, path_to_load):
         state_dict = torch.load(path_to_load)
         self.initial_tokens = state_dict['initial_tokens']
@@ -158,6 +204,8 @@ class SoftPrompt(nn.Module):
         self.num_tokens = state_dict['num_tokens']
         self.prompt_embeddings = state_dict['prompt_embeddings'].squeeze(0)
 
+
+    # NOTE: Unused Code?
     def get_nearest_to_embeds(self, distance='cosine'):
         """
             Retrieves the discrete, nearest hard tokens to the prompt embeddings
@@ -184,6 +232,7 @@ class SoftPrompt(nn.Module):
 
         return nearest_idx, discrete_prompt
     
+    # NOTE: Unused Code?
     def get_nearest_to_logits(self, k):
         """
             Retrieves of the k likeliest predicted next-prompt tokens based on logit probs
@@ -206,6 +255,7 @@ class SoftPrompt(nn.Module):
                 decodeds.append(toks)
         return decodeds, topk_vals
     
+
     def _get_prompt_logits(self):
         prompt_embeds = self.forward()
         logits = self._model(inputs_embeds=prompt_embeds, output_hidden_states=False, use_cache=False).logits
@@ -213,6 +263,7 @@ class SoftPrompt(nn.Module):
         probs = F.softmax(logits, dim=-1)
 
         return logits, probs
+
 
     def get_prompt_logits(self):
         """
@@ -224,6 +275,7 @@ class SoftPrompt(nn.Module):
         with torch.no_grad():
             logits, probs = self._get_prompt_logits()
         return logits, probs
+    
     
     def get_parsability(self):
         """
