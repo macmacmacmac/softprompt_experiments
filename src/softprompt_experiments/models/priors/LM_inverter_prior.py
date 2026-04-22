@@ -87,7 +87,7 @@ class LM_inverter_prior(logit_priors.LogitPrior):
         # zero out ignored positions
         token_log_probs = token_log_probs.masked_fill(labels == -100, 0.0)
 
-        return token_log_probs.sum(dim=-1)
+        return token_log_probs.sum(dim=-1) / (labels!=-100).sum(-1)
     def log_prob_q_of_z_prime_given_x_z(
             self,
             z_prime: torch.Tensor, 
@@ -223,7 +223,7 @@ class LM_inverter_prior(logit_priors.LogitPrior):
         - Compute CE between log p(y|z',x) and log(p|z,x)
         - Treat z^ as a detached random variable, no gradient
     """
-    def log_prob(self, output, attn_mask_z_x_y, **kwargs):
+    def roll_out(self, output, attn_mask_z_x_y, **kwargs):
         """
         output: transformers llm output
         attention_mask: [B, T]
@@ -242,18 +242,25 @@ class LM_inverter_prior(logit_priors.LogitPrior):
         labels = kwargs["labels"]
         S = kwargs["softprompt_len"]
 
+        """       
+            ========= 1: Sample the trajectory (hard prompt z') =========
+        """
         # Sample z_primes [B, T, V] (t5 tokenized), build batch
         z_primes = self.sample_z_prime_from_q(output, labels)
         # print(z_primes.shape)
         embs_z_prime, attn_mask_z_prime, labels_z_prime = self.build_batch(z_primes)
 
-        # Calc q(z_prime|x,z)
+        """       
+            ========= 2: Calculate my log probability terms =========
+        """
+
+        # Calc q(z'|x,z)
         log_q_z_prime_x_z = self.log_prob_q_of_z_prime_given_x_z(z_primes, output)
 
-        # Calc p(z_prime)
+        # Calc p(z')
         log_p_z_prime = self.log_prob_p_of_z_prime(embs_z_prime, attn_mask_z_prime, labels_z_prime)
 
-        # Calc p(y|x,z_prime)
+        # Calc p(y|x,z')
         log_p_y_x_z_prime = self.log_p_of_y_given_x_z_prime(
             embs_z_prime, 
             input_embeds,
@@ -263,16 +270,98 @@ class LM_inverter_prior(logit_priors.LogitPrior):
             S
         )
 
-        reward = (
-            # v1: just reconstruction and natural language readability loss for now
-            log_p_y_x_z_prime + log_p_z_prime
-
-            # full:
-            # log_p_y_x_z_prime + CE_pz_pz_prime + log_p_z_prime - log_q_z_prime_x_z
+        batch_info_for_logging = (
+            f"\t-log p(y|x,z') mu: {- log_p_y_x_z_prime.mean().item():.3f}, var: {log_p_y_x_z_prime.var(unbiased=False).item():.3f}\n"
+            f"\t-log p(z') mu: {- log_p_z_prime.mean().item():.3f}, var: {log_p_z_prime.var(unbiased=False).item():.3f}\n"
+            f"\t-log q(z'|x,z) mu: {- log_q_z_prime_x_z.mean().item():.3f}, var: {log_q_z_prime_x_z.var(unbiased=False).item():.3f}\n"
         )
-        advantage = (reward - reward.mean()) / (reward.std() + 1e-8)        
-        loss = (
-            - log_q_z_prime_x_z * advantage.detach()
+
+        """       
+            ========= 3: Calculate my log probability terms =========
+        """
+        reward = (
+            # v1: 
+            log_p_y_x_z_prime.detach() 
+            
+            # v2:
+            # log_p_y_x_z_prime.detach() + log_p_z_prime.detach()
+
+            # v3:
+            # log_p_y_x_z_prime.detach() + CE_pz_pz_prime + log_p_z_prime.detach() - log_q_z_prime_x_z
         )
         
+        return {
+            "z_prime": z_primes.detach(),
+            "log_q_z_prime_x_z": log_q_z_prime_x_z,
+            "reward": reward.detach(),
+            "input_embeds": input_embeds.detach(),
+            "labels": labels.detach(),
+            "attn_mask_z_x_y": attn_mask_z_x_y.detach(),
+            "log":batch_info_for_logging
+        }
+    
+    def log_prob(self, output, attn_mask_z_x_y, **kwargs):
+        if 'trajectories' in kwargs:
+            return self.PPO(output, attn_mask_z_x_y, **kwargs)
+        else:
+            with torch.no_grad():
+                loss = self.REINFORCE(output, attn_mask_z_x_y, **kwargs)
+                return loss
+            
+    # VANILLA REINFORCE      
+    def REINFORCE(self, output, attn_mask_z_x_y, **kwargs):
+        # only for eval at this point
+        trajectories = self.roll_out(output, attn_mask_z_x_y, **kwargs)
+        log_q_z_prime_x_z = trajectories['log_q_z_prime_x_z']
+        reward = trajectories['reward']
+        advantage = (reward - reward.mean()) / (reward.std() + 1e-8)        
+        loss = (
+            -1. * log_q_z_prime_x_z * advantage.detach()
+        )
         return loss
+
+    def sample_old_rollouts(self, output, attn_mask_z_x_y, **kwargs):
+        """
+           Run this through each batch in the entire trainset once every epoch
+           Then collect each batch trajectories in a list of trajectories batches
+        """
+        with torch.no_grad():
+            trajectories = self.roll_out(output, attn_mask_z_x_y, **kwargs)
+            return trajectories
+        
+    # PPO
+    def PPO(self, output, attn_mask_z_x_y, **kwargs):
+        """
+            PPO version, this expects a randomly sampled trajectories batch
+            from the list of trajectories batches [trajectories, trajectories, ...]
+
+        """
+        epsilon = 0.2
+        trajectories =  kwargs['trajectories']
+        baseline = kwargs['baseline']
+        z_primes = trajectories["z_prime"]
+        log_q_old = trajectories["log_q_z_prime_x_z"].detach()
+        reward = trajectories["reward"]
+
+        # using V(x)
+        # advantage = reward - baseline.detach()
+        # advantage = advantage / (advantage.std() + 1e-8)     
+        # without using V(x)   
+        advantage = (reward - reward.mean()) / (reward.std() + 1e-8)
+
+        # recompute with CURRENT policy
+        log_q_new = self.log_prob_q_of_z_prime_given_x_z(
+            z_primes,
+            output  # or recompute forward pass
+        )
+
+        ratio = torch.exp(log_q_new - log_q_old)
+
+        unclipped = ratio * advantage
+        clipped = torch.clamp(ratio, 1 - epsilon, 1 + epsilon) * advantage
+
+        # loss = -torch.min(unclipped, clipped).mean()
+        entropy = -log_q_new.mean()
+        ppo_loss = torch.min(unclipped, clipped).mean() + 0.5 * entropy
+
+        return -1. * ppo_loss

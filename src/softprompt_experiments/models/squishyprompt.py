@@ -58,7 +58,22 @@ class SquishyPrompt(SoftPrompt):
         )
         self.logits_prior = logits_prior
 
-    def loss_fn(self, input_embeds, labels, attention_mask, return_entropy=False):
+    def sample_old_trajectories(self, input_embeds, labels, attention_mask):
+        outputs = self._model(
+            inputs_embeds=input_embeds,
+            attention_mask=attention_mask,   # fully causal
+            labels=labels          # HF computes CE internally
+        )
+        trajectories = self.logits_prior.sample_old_rollouts(
+            outputs, 
+            attention_mask,
+            input_embeds=input_embeds,
+            labels=labels,
+            softprompt_len=self.num_tokens
+        )
+        return trajectories    
+
+    def loss_fn(self, input_embeds, labels, attention_mask, **kwargs):
         """
             Computes normal task supervision loss based on next-token predictions.
             But also incorporates a prior over the logits.
@@ -81,7 +96,8 @@ class SquishyPrompt(SoftPrompt):
             attention_mask,
             input_embeds=input_embeds,
             labels=labels,
-            softprompt_len=self.num_tokens
+            softprompt_len=self.num_tokens,
+            **kwargs
         ).mean()
         # prior_term += self.logits_prior.log_prob(sp_logits).mean()
         # prior_term = prior_term/2

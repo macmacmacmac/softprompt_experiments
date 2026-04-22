@@ -28,7 +28,7 @@ from softprompt_experiments.utils import (
 from peft import PromptTuningInit, PromptTuningConfig, get_peft_model
 import logging
 
-# --scripts dataset_nl_custom squishyprompt_generator_regression softprompt_lm_inversion --model_name 'meta-llama/Llama-2-7b-hf' --save_directory ./datasets/logit_prior_inv --verbose --lambd 0.1
+# --scripts dataset_nl_custom squishyprompt_generator_regression softprompt_lm_inversion --model_name 'meta-llama/Llama-2-7b-hf' --save_directory ./datasets/logit_prior_inv_1 --verbose --lambd 0.1
 
 def run(args_list):
     exp_name = os.path.basename(__file__)

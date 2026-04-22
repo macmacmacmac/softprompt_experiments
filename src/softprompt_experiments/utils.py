@@ -124,7 +124,7 @@ def get_train_test_from_tokenized(tokenized_dataset_dir: str, batchsize: int, au
         test_dataset = load_dataset_from_path(test_path)
 
     # Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=batchsize, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=batchsize, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batchsize, shuffle=False)
 
     return train_dataset, test_dataset, train_loader, test_loader
