@@ -6,8 +6,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from softprompt_experiments.models.softprompt import SoftPrompt
 from tqdm import tqdm
 import pandas as pd
-from datasets import load_dataset
-from datasets import concatenate_datasets
+from datasets import load_dataset, concatenate_datasets
 import evaluate
 
 

@@ -92,8 +92,8 @@ def run(args_list):
 
     # TODO: Refine this further after spot checking
     system_prompt = (
-        "You are an expert at simplifying and extremely condensing instructions. "
-        "Your task is to paraphrase the following instruction into a highly concise statement. "
+        "You are an expert at simplifying and extremely condensing instructions."
+        "Your task is to paraphrase the following instruction into a highly concise statement."
         "CRITICAL: You MUST explicitly preserve all specific classes, exact tags, labels, output formats, and special syntax constraints. "
         "CRITICAL: Do NOT oversimplify or remove specific mappings between concepts (e.g., specifying which sentence is the premise, exact sentence counts, positional logic, or structural relationships). "
         "Use a maximum of 3 to 5 short sentences. Strip away ONLY filler words, long narrative examples, and conversational redundant explanations. "
