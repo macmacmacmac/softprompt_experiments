@@ -98,7 +98,7 @@ class SoftPrompt(nn.Module):
 
         return outputs.loss, entropy    
     
-    def generate_from_embeds(self, embeds=None, max_new_tokens=20, do_sample=True, suffix_str=None):
+    def generate_from_embeds(self, add_sp_embeds=True, embeds=None, max_new_tokens=20, do_sample=True, suffix_str=None, return_decoded=True):
         """
         Generate text given softprompt embeddings.
         Args:
@@ -111,9 +111,12 @@ class SoftPrompt(nn.Module):
         """
         with torch.no_grad():
             if embeds is not None:
-                sp_embeds = self.forward()   # [1, soft_len, dim]
-                sp_embeds = sp_embeds.expand(len(embeds), -1, -1) #[batchsize, soft_len, dim]
-                full_embs = torch.cat([sp_embeds,embeds],dim=1)
+                if add_sp_embeds:
+                    sp_embeds = self.forward()   # [1, soft_len, dim]
+                    sp_embeds = sp_embeds.expand(len(embeds), -1, -1) #[batchsize, soft_len, dim]
+                    full_embs = torch.cat([sp_embeds,embeds],dim=1)
+                else:
+                    full_embs = embeds
                 if suffix_str:
                     ids = self._tokenizer(suffix_str, return_tensors="pt").input_ids.to(self._model.device)
                     suffix_embs = self._word_embeddings(ids).to(dtype=self._model.dtype)
@@ -140,11 +143,13 @@ class SoftPrompt(nn.Module):
                     do_sample=do_sample,
                     pad_token_id=self._tokenizer.eos_token_id
                 )
-            
-        output = self._tokenizer.batch_decode(
-            output_ids, skip_special_tokens=True
-        )
-        return output
+        if return_decoded:
+            output = self._tokenizer.batch_decode(
+                output_ids, skip_special_tokens=True
+            )
+            return output
+        else:
+            return output_ids
 
     def save_softprompt(self, path_to_save):
         state_dict = {

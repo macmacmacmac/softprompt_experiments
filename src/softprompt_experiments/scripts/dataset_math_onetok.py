@@ -36,7 +36,7 @@ def run(args_list):
     # generate dataset
     formulas = [
         { 
-            'expr': "(x + y + z)", #sum
+            'expr': "(1*x + 2*y + 3*z)",
             'high':10,
             'input_template': "Input: x={x},y={y},z={z}\n Answer: ",
             'output_template': "{out}"

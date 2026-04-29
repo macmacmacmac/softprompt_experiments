@@ -26,18 +26,15 @@ def args_from_config(args_cls, config):
             setattr(args, key, value)
     return args
 
-class LM_inverter_prior(logit_priors.LogitPrior):
+class continuations_inverter_prior(logit_priors.LogitPrior):
     """
     Prior assuming logits follow a Gaussian mixture model after PCA.
     """
-    def __init__(self, base_model, base_tokenizer, base_word_embeddings, softprompt_len):
+    def __init__(self, model, tokenizer, softprompt):
         super().__init__()
-        self.base_model = base_model
-        self.base_tokenizer = base_tokenizer
-        self.word_embeddings = base_word_embeddings
-        self.softprompt_len = softprompt_len
-        self.inversion_model = load_model(base_model, base_tokenizer)
-        self.inversion_model.to(base_model.device)
+        self.model = model
+        self.tokenizer = tokenizer
+        self.softprompt = softprompt
         # self.gen_kwargs = {
         #     "early_stopping": False,
         #     "num_beams": 1,
@@ -57,27 +54,21 @@ class LM_inverter_prior(logit_priors.LogitPrior):
 
     def sample_z_prime_from_q(
             self, 
-            x_z: BaseModelOutput, 
+            x_z: torch.Tensor, #input embeds
             labels_z_x_y: Optional[torch.Tensor]=None,
-            softprompt_len: Optional[int]=None
         ):
         """
         Samples a z' ~ q(z'|x,z)
         """
         with torch.no_grad():
             # auto regressively generates z prime
-
-            B = x_z.logits.shape[0]
-            # first logit to predict token after prompt
-            # last_logits_idxs = softprompt_len - 1
-            # first logit to predict the first label token
-            last_logits_idxs = (labels_z_x_y != -100).float().argmax(dim=1) - 1
-        
-            last_logits = x_z.logits[torch.arange(B), last_logits_idxs]
-
-            z_prime = self.inversion_model.generate_from_output(
-                last_logits,
-                self.gen_kwargs,
+            z_prime = self.softprompt.generate_from_embeds(
+                embeds=x_z,
+                max_new_tokens=64, 
+                do_sample=True, 
+                suffix_str="First, I should",
+                add_sp_embeds=False,
+                return_decoded=False
             )
 
             return z_prime
@@ -100,43 +91,61 @@ class LM_inverter_prior(logit_priors.LogitPrior):
         # zero out ignored positions
         token_log_probs = token_log_probs.masked_fill(labels == -100, 0.0)
 
-        return token_log_probs.sum(dim=-1) / (labels!=-100).sum(-1)
-    def log_prob_q_of_z_prime_given_x_z(
+        return token_log_probs
+    
+    def entropy_under_q(
             self,
             z_prime: torch.Tensor, 
             x_z: BaseModelOutput, 
             labels_z_x_y: Optional[torch.Tensor]=None,
-            softprompt_len: Optional[int]=None
         ):
         """
         Computes log q(z'|x,z)
         """
         B = x_z.logits.shape[0]
 
-        # first logit to predict token after prompt
-        # last_logits_idxs = softprompt_len - 1
-        # first logit to predict the first label token
         last_logits_idxs = (labels_z_x_y != -100).float().argmax(dim=1) - 1
     
         last_logits = x_z.logits[torch.arange(B), last_logits_idxs]
 
         labels_z_prime = z_prime.clone()
-        labels_z_prime[labels_z_prime==self.base_tokenizer.pad_token_id] = -100
+        labels_z_prime[labels_z_prime!=self.tokenizer.pad_token_id] = -100
 
         outputs = self.inversion_model.forward(
             last_logits, 
             labels=labels_z_prime
         )
+
+        probs = torch.softmax(outputs.logits[:, :-1, :], dim=-1)
+        log_probs = torch.log_softmax(outputs.logits[:, :-1, :], dim=-1)
+        mask = (labels_z_prime[:,1:]!=self.tokenizer.pad_token_id).float()
         
-        # Method 1: actual
-        # HF logits are shifted left like [b^,c^,d^,next_token^]
-        log_prob = self.log_prob_from_logits(outputs.logits, labels_z_prime)
+        H = (-(probs*log_probs).sum(dim=-1) * mask).sum(dim=-1) / mask.sum(dim=-1)
+
+        return H
+
+    def log_prob_q_of_z_prime_given_x_z(
+            self,
+            z_prime: torch.Tensor, 
+            x_z: BaseModelOutput, 
+            labels_z_x_y: Optional[torch.Tensor]=None,
+        ):
+        """
+        Computes log q(z'|x,z)
+        """
+        B = x_z.logits.shape[0]
+
+        labels_z_prime = z_prime.clone()
+        labels_z_prime[labels_z_prime!=self.softprompt._tokenizer.pad_token_id] = -100
+
+        outputs = self.softprompt.model(
+            z_prime, 
+            labels=labels_z_prime
+        )
         
-        # Method 2: lazy
-        # loss = outputs.loss
-        # num_tokens = (labels_z_prime != -100).sum()
-        # log_prob = -loss * num_tokens
-        return log_prob
+        # log_probs = self.log_prob_from_logits(outputs.logits, labels_z_prime)
+        
+        return outputs.loss
 
     def log_prob_p_of_z_prime(
             self,
@@ -148,19 +157,15 @@ class LM_inverter_prior(logit_priors.LogitPrior):
         Computes log p(z')
         embs_z_prime: z_prime in llama emb space
         """
-        outputs = self.base_model(
+        outputs = self.model(
             inputs_embeds=embs_z_prime, 
             attention_mask=attn_mask_z_prime,
-            # labels=labels_z_prime
+            labels=labels_z_prime
         )
-        # Method 1: actual
-        log_prob = self.log_prob_from_logits(outputs.logits, labels_z_prime)
+
+        # log_probs = self.log_prob_from_logits(outputs.logits, labels_z_prime)
         
-        # Method 2: lazy
-        # loss = outputs.loss
-        # num_tokens = (labels_z_prime != -100).sum()
-        # log_prob = -loss * num_tokens
-        return log_prob
+        return outputs.loss
     
     def log_p_of_y_given_x_z_prime(
         self,
@@ -182,14 +187,7 @@ class LM_inverter_prior(logit_priors.LogitPrior):
 
         #2) stick hard prompt z prime in there
         z_prime_x_y = torch.cat([embs_z_prime, embs_x_y], dim=1)
-        # print(f"attn_mask_z_x_y {attn_mask_z_x_y.shape}")
-        # print(f"attn_mask_z_x_y raw {attn_mask_z_x_y}")
-        # print(f"attn_mask_x_y {attn_mask_x_y.shape}")
-        # print(f"attn_mask_z_prime {attn_mask_z_prime.shape}")
-        # print(f"attn_mask_z_prime raw {attn_mask_z_prime}")
         attn_mask_z_prime_x_y = torch.cat([attn_mask_z_prime, attn_mask_x_y], dim=1)
-        # print(f"attn_mask_z_prime_x_y raw {attn_mask_z_prime_x_y.shape}")
-        # print(f"attn_mask_z_prime_x_y raw {attn_mask_z_prime_x_y}")
         labels_z_prime = torch.full(
             (labels_x_y.shape[0], embs_z_prime.shape[1]),
             -100,
@@ -198,22 +196,15 @@ class LM_inverter_prior(logit_priors.LogitPrior):
         )
         labels_z_prime_x_y = torch.cat([labels_z_prime, labels_x_y], dim=1)
 
-        # print(f"z_prime_x_y: {z_prime_x_y.shape}")
-        # print(f"attn_mask_z_prime_x_y: {attn_mask_z_prime_x_y.shape}")
         outputs = self.base_model(
             inputs_embeds=z_prime_x_y,
             attention_mask=attn_mask_z_prime_x_y,
             # labels=labels_z_prime_x_y
         )
 
-        # Method 1: actual
-        log_prob = self.log_prob_from_logits(outputs.logits, labels_z_prime_x_y)
-        # Method 2: lazy
-        # loss = outputs.loss
-        # num_tokens = (labels_z_prime_x_y != -100).sum()
-        # log_prob = -loss * num_tokens
+        log_probs = self.log_prob_from_logits(outputs.logits, labels_z_prime_x_y)
 
-        return log_prob
+        return log_probs.sum(dim=-1) / (labels_z_prime_x_y!=-100).sum(-1)
     
     def build_batch(
         self,
@@ -271,8 +262,7 @@ class LM_inverter_prior(logit_priors.LogitPrior):
             ========= 1: Sample the trajectory (hard prompt z') =========
         """
         # Sample z_primes [B, T, V] (t5 tokenized), build batch
-        z_primes = self.sample_z_prime_from_q(output, labels_z_x_y=labels, softprompt_len=S)
-        # print(z_primes.shape)
+        z_primes = self.sample_z_prime_from_q(output, labels_z_x_y=labels)
         embs_z_prime, attn_mask_z_prime, labels_z_prime = self.build_batch(z_primes)
 
         """       
@@ -280,7 +270,7 @@ class LM_inverter_prior(logit_priors.LogitPrior):
         """
 
         # Calc q(z'|x,z)
-        log_q_z_prime_x_z = self.log_prob_q_of_z_prime_given_x_z(z_primes, output, labels_z_x_y=labels, softprompt_len=S)
+        log_q_z_prime_x_z = self.log_prob_q_of_z_prime_given_x_z(z_primes, output, labels_z_x_y=labels)
 
         # Calc p(z')
         log_p_z_prime = self.log_prob_p_of_z_prime(embs_z_prime, attn_mask_z_prime, labels_z_prime)
@@ -293,18 +283,6 @@ class LM_inverter_prior(logit_priors.LogitPrior):
             attn_mask_z_x_y,
             labels,
             S
-        )
-
-        decoded = self.inversion_model.tokenizer.batch_decode(
-            z_primes,
-            skip_special_tokens=True
-        )[0]
-
-        batch_info_for_logging = (
-            f"\t-log p(y|x,z') mu: {- log_p_y_x_z_prime.mean().item():.3f}, var: {log_p_y_x_z_prime.var(unbiased=False).item():.3f}, best:{(-log_p_y_x_z_prime).min():.3f}\n"
-            f"\t-log p(z') mu: {- log_p_z_prime.mean().item():.3f}, var: {log_p_z_prime.var(unbiased=False).item():.3f}, best:{(-log_p_z_prime).min():.3f}\n"
-            f"\t-log q(z'|x,z) mu: {- log_q_z_prime_x_z.mean().item():.3f}, var: {log_q_z_prime_x_z.var(unbiased=False).item():.3f}, best:{(-log_q_z_prime_x_z).min():.3f}\n"
-            f"\tDecoded sample: {decoded}\n"
         )
 
         """       
@@ -321,8 +299,23 @@ class LM_inverter_prior(logit_priors.LogitPrior):
             # log_p_y_x_z_prime.detach() + CE_pz_pz_prime + log_p_z_prime.detach() - log_q_z_prime_x_z
         )
         
+        decoded_z_prime = self.inversion_model.tokenizer.batch_decode(
+            z_primes,
+            skip_special_tokens=True
+        )
+
+        log_q_for_logging = log_q_z_prime_x_z.sum(dim=-1) / (z_primes != self.inversion_model.tokenizer.pad_token_id).sum(-1)
+
+        batch_info_for_logging = (
+            f"\t-log p(y|x,z') mu: {- log_p_y_x_z_prime.mean().item():.3f}, var: {log_p_y_x_z_prime.var(unbiased=False).item():.3f}, best:{(-log_p_y_x_z_prime).min():.3f}\n"
+            f"\t-log p(z') mu: {- log_p_z_prime.mean().item():.3f}, var: {log_p_z_prime.var(unbiased=False).item():.3f}, best:{(-log_p_z_prime).min():.3f}\n"
+            f"\t-log q(z'|x,z) mu: {- log_q_for_logging.mean().item():.3f}, var: {log_q_for_logging.var(unbiased=False).item():.3f}, best:{(-log_q_for_logging).min():.3f}\n"
+            f"\tExample Z prime: {decoded_z_prime[torch.argmax(reward)]}"
+        )
+
         return {
             "z_prime": z_primes.detach(),
+            "decoded_z_prime": decoded_z_prime,
             "log_q_z_prime_x_z": log_q_z_prime_x_z,
             "reward": reward.detach(),
             "input_embeds": input_embeds.detach(),
@@ -369,43 +362,46 @@ class LM_inverter_prior(logit_priors.LogitPrior):
         """
         epsilon = 0.2
         trajectories =  kwargs['trajectories']
-        baseline = kwargs['baseline']
+        value = kwargs['baseline']
         labels = kwargs["labels"]
         z_primes = trajectories["z_prime"]
-        log_q_old = trajectories["log_q_z_prime_x_z"].detach()
-        reward = trajectories["reward"]
         S = self.softprompt_len
 
 
-        # using V(x)
-        # advantage = reward - baseline.detach()
-        # advantage = advantage / (advantage.std() + 1e-8)     
-        # without using V(x)   
-        advantage = (reward - reward.mean()) / (reward.std() + 1e-8)
-
-        # recompute with CURRENT policy
+        reward = trajectories["reward"].unsqueeze(-1)
+        advantage = reward - value
+        advantage = (advantage - advantage.mean(dim=0, keepdim=True)) / (advantage.std(dim=0, keepdim=True) + 1e-8)
+        # This is now [B, T]
+        log_q_old = trajectories["log_q_z_prime_x_z"].detach()
         log_q_new = self.log_prob_q_of_z_prime_given_x_z(
             z_primes,
             output,  # or recompute forward pass
             labels_z_x_y=labels,
-            softprompt_len=S
         )
 
         ratio = torch.exp(log_q_new - log_q_old)
 
+        # mask out padding tokens
+        mask = (z_primes[:,1:] != self.inversion_model.tokenizer.pad_token_id)
+        num_non_pad_tokens = mask.sum(dim=-1)
+
         unclipped = ratio * advantage
         clipped = torch.clamp(ratio, 1 - epsilon, 1 + epsilon) * advantage
+        L_clipped_t = (torch.min(unclipped, clipped)) #[B,T]
+        
+        # zero loss from padding tokens, then sum across seq dim and normalize
+        L_clipped = (L_clipped_t* mask).sum(dim=-1) / num_non_pad_tokens # [B]
 
-        entropy = -log_q_new.mean()
+        # entropy = (-log_q_new.sum(dim=-1) / mask.sum(dim=-1)).mean(dim=-1)
+        entropy = self.entropy_under_q(z_primes, output, labels)
 
-        L_clipped = torch.min(unclipped, clipped).mean()
-        L_entropy = 0.0 * entropy
+        L_entropy = 0.02 * entropy
 
         print(
             # f"\tReward: {reward.mean()}\n"
             # f"\tAdvantage: {advantage.mean()}\n"
-            f"\tL_clipped: {L_clipped}\n"
-            # f"\tL_entropy: {L_entropy}"
+            f"\tL_clipped: {L_clipped.mean(dim=-1)}\n"
+            f"\tL_entropy: {L_entropy.mean(dim=-1)}"
         )
 
-        return (L_clipped + L_entropy)
+        return -(L_clipped + L_entropy)

@@ -22,7 +22,7 @@ def run(args_list):
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_samples_per_dataset", type=int, default=500)
     parser.add_argument("--save_directory", type=str, default="./datasets/math_dataset_custom")
-    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-2-7b-hf")
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8b-Instruct")
     args, _ = parser.parse_known_args(args_list)
     
     MODEL_NAME = args.model_name
