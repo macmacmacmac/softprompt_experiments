@@ -20,7 +20,7 @@ def run(args_list=None):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--val_dataset_path", type=str, default="./datasets/mapper_training_dataset/SUPER-NATURALINSTRUCTIONS-english-filtered/val_mapper_dataset.pt")
+    parser.add_argument("--val_dataset_path", type=str, default="./datasets/mapper_training_dataset/SUPER-NATURALINSTRUCTIONS-english-filtered_original_instructions/val_mapper_dataset.pt")
     parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/SUPER-NATURALINSTRUCTIONS-english-filtered")
     parser.add_argument("--training_stats_path", type=str, default="./trained_soft_prompts/SUPER-NATURALINSTRUCTIONS-english-filtered/training_stats.csv")
     parser.add_argument("--sample", action='store_true', help="Use a sample of val dataset instead of the full val dataset")
@@ -28,7 +28,8 @@ def run(args_list=None):
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_tokens", type=int, default=20)
     parser.add_argument("--seed", type=int, default=47)
-    parser.add_argument("--output_json", type=str, default="./SupNatInstruct_verbalizations.json")
+    parser.add_argument("--do-sample", action="store_true", help="Enable sampling decoding")
+    parser.add_argument("--output_json", type=str, default="./SupNatInstruct_verbalizations_original_instructions.json")
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
@@ -39,6 +40,7 @@ def run(args_list=None):
     BATCH_SIZE = args.batch_size
     NUM_SAMPLES = args.num_samples
     SEED = args.seed
+    DO_SAMPLE = args.do_sample
     OUTPUT_JSON = args.output_json
 
     # Set the Seed for this experiment
@@ -99,6 +101,7 @@ def run(args_list=None):
             # Extract data for the batch
             task_names = [s["task_name"] for s in batch_samples]
             hard_prompts = [s["hard_prompt"] for s in batch_samples]
+            instances_list = [s.get("instances", []) for s in batch_samples]
             
             # Stack soft prompts: (batch_size, seq_len, embed_dim)
             soft_prompts = torch.stack([s["soft_prompt"] for s in batch_samples]).to(DEVICE, dtype=DTYPE)
@@ -111,7 +114,9 @@ def run(args_list=None):
                 inputs_embeds=soft_prompts,
                 attention_mask=attention_mask,
                 max_new_tokens=300,
-                do_sample=False, 
+                do_sample=DO_SAMPLE,
+                temperature=0.7 if DO_SAMPLE else None,
+                top_p=0.9 if DO_SAMPLE else None,
                 pad_token_id=tokenizer.eos_token_id
             )
             
@@ -140,7 +145,8 @@ def run(args_list=None):
                     "hard_prompt": hard_prompts[j],
                     "verbalization": pred_texts[j],
                     "task_rouge_l": task_rouge_l,
-                    "verbalization_rouge_l": rouge_l_scores[j]
+                    "verbalization_rouge_l": rouge_l_scores[j],
+                    "instances": instances_list[j]
                 })
 
     # Save to JSON

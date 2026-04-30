@@ -2,13 +2,13 @@
 #SBATCH -N 1
 #SBATCH -n 8
 #SBATCH --mem=32g
-#SBATCH -J "TestMapper"
+#SBATCH -J "SuperNatMapper"
 #SBATCH -p short
 #SBATCH -t 24:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -C A100
-#SBATCH -o test_logs.out
-#SBATCH -e test_logs.out
+#SBATCH -o logs.out
+#SBATCH -e logs.out
 
 # -----------------------------
 # Load Required Modules

@@ -3,10 +3,10 @@ import argparse
 from tqdm import tqdm
 import torch
 from datasets import load_dataset
-from typing import List, Dict
+from typing import List, Dict, Any
 
 
-def compile_data_list(dataset_records: List[Dict[str, str]], 
+def compile_data_list(dataset_records: List[Dict[str, Any]], 
                       trained_soft_prompts_dir: str, 
                       dataset_name: str) -> List[Dict]:
 
@@ -21,7 +21,9 @@ def compile_data_list(dataset_records: List[Dict[str, str]],
 
         # Unpack task_name and hard_prompt
         task_name = task_map['task_name']
-        hard_prompt = task_map['reduced_instructions']
+        # hard_prompt = task_map['reduced_instructions']
+        hard_prompt = task_map['instruction']
+        instances = task_map['instances']
 
         # If we encounter a new task name
         # Then we refresh the soft prompt tensor
@@ -49,7 +51,8 @@ def compile_data_list(dataset_records: List[Dict[str, str]],
         compiled_data.append({
             "task_name": task_name,
             "soft_prompt": soft_prompt_tensor,
-            "hard_prompt": hard_prompt
+            "hard_prompt": hard_prompt,
+            "instances": instances
         })
 
     # Log how many datasets were skipped
@@ -87,10 +90,41 @@ def run(args_list):
     DATASET_NAME = DATASET_PATH.split('/')[-1]
 
     # Fetch all hard prompts from Hugging Face Dataset
-    hf_dataset = load_dataset(DATASET_PATH).select_columns(['task_name', 'reduced_instructions'])
-    train_dataset_df = hf_dataset['train'].to_pandas().drop_duplicates(subset=['task_name']).explode('reduced_instructions')
-    test_dataset_df = hf_dataset['test'].to_pandas().drop_duplicates(subset=['task_name']).explode('reduced_instructions')
+    # hf_dataset = load_dataset(DATASET_PATH).select_columns(['task_name', 'reduced_instructions', 'input', 'output'])
+    hf_dataset = load_dataset(DATASET_PATH).select_columns(['task_name', 'instruction', 'input', 'output'])
     
+    # First, explode the instructions so each row has a single reduced_instruction
+    # train_dataset_df = hf_dataset['train'].to_pandas().explode('reduced_instructions')
+    # test_dataset_df = hf_dataset['test'].to_pandas().explode('reduced_instructions')
+
+    train_dataset_df = hf_dataset['train'].to_pandas()
+    test_dataset_df = hf_dataset['test'].to_pandas()
+
+    # Then group by task and instruction, and take the first 3 rows from each group
+    # train_dataset_df = train_dataset_df.groupby(['task_name', 'reduced_instructions']).head(3).reset_index(drop=True)
+    # test_dataset_df = test_dataset_df.groupby(['task_name', 'reduced_instructions']).head(3).reset_index(drop=True)
+
+    train_dataset_df = train_dataset_df.groupby(['task_name', 'instruction']).head(3).reset_index(drop=True)
+    test_dataset_df = test_dataset_df.groupby(['task_name', 'instruction']).head(3).reset_index(drop=True)
+
+    # NOW: Group them back together and fold the input/output pairs into an 'instances' column
+    # train_dataset_df = train_dataset_df.groupby(['task_name', 'reduced_instructions']).apply(
+    #     lambda x: x[['input', 'output']].to_dict('records')
+    # ).reset_index(name='instances')
+
+    # test_dataset_df = test_dataset_df.groupby(['task_name', 'reduced_instructions']).apply(
+    #     lambda x: x[['input', 'output']].to_dict('records')
+    # ).reset_index(name='instances')
+
+    train_dataset_df = train_dataset_df.groupby(['task_name', 'instruction']).apply(
+        lambda x: x[['input', 'output']].to_dict('records')
+    ).reset_index(name='instances')
+
+    test_dataset_df = test_dataset_df.groupby(['task_name', 'instruction']).apply(
+        lambda x: x[['input', 'output']].to_dict('records')
+    ).reset_index(name='instances')
+
+
     # Create a List of {Dataset Task, Hard Prompt} Dicts for Train and Test sets
     train_dataset_records = train_dataset_df.to_dict(orient='records')
     test_dataset_records = test_dataset_df.to_dict(orient='records')
@@ -106,7 +140,8 @@ def run(args_list):
     print(f"\nCompilation Complete! Successfully paired: {len(train_compiled_data)} train datasets and {len(test_compiled_data)} test datasets.")
 
     # Create the Directory for saving the datasets
-    save_dir = os.path.join(COMPILED_DATASET_DIR, DATASET_NAME)
+    # save_dir = os.path.join(COMPILED_DATASET_DIR, DATASET_NAME)
+    save_dir = os.path.join(COMPILED_DATASET_DIR, DATASET_NAME + "_original_instructions")
     os.makedirs(save_dir, exist_ok=True)
     
     # Save the Training and Validation Datasets

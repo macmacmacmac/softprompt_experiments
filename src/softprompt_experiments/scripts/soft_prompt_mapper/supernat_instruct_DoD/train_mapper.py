@@ -33,7 +33,10 @@ class MapperCollator:
         
         # Stack the frozen soft prompts into a batch: (batch_size, soft_prompt_len, embed_dim)
         soft_prompts = torch.stack(soft_prompts)        # (batch_size, soft_prompt_len, embed_dim)
-        
+
+        # Explicitly append the EOS token so the model learns when to stop
+        hard_prompts = [prompt + self.tokenizer.eos_token for prompt in hard_prompts]
+    
         # Tokenize the target hard prompts
         tokenized = self.tokenizer(
             hard_prompts, 
@@ -74,7 +77,7 @@ def run(args_list=None):
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--num_tokens", type=int, default=20)
-    parser.add_argument("--mapper_dataset_path", type=str, default="./datasets/mapper_training_dataset/SUPER-NATURALINSTRUCTIONS-english-filtered")
+    parser.add_argument("--mapper_dataset_path", type=str, default="./datasets/mapper_training_dataset/SUPER-NATURALINSTRUCTIONS-english-filtered_original_instructions")
     parser.add_argument("--save_dir", type=str, default="./mapper_lora_weights")
     parser.add_argument("--lora_rank", type=int, default=4)
     parser.add_argument("--lora_dropout", type=float, default=0.1)
