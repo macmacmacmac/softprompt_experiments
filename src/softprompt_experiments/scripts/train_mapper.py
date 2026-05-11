@@ -86,7 +86,7 @@ def run(args_list=None):
 
     # Parse all the arguments into Variables
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-    MAPPER_DATASET_PATH = args.mapper_dataset_path
+    MAPPER_DATASET_PATH = os.path.join('./datasets/mapper_training_dataset',args.mapper_dataset_path)
     DB_NAME = MAPPER_DATASET_PATH.split('/')[-1]
     SAVE_DIR = os.path.join(MAPPER_DATASET_PATH, "mapper_lora_weights") #lora save dir
     LR = args.lr

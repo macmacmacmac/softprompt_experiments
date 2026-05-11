@@ -20,30 +20,28 @@ def run(args_list=None):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--proportion_to_use", type=float, default=1.0)
-    parser.add_argument("--mapper_dataset_path", type=str, default="./datasets/mapper_training_dataset/supnat_eng_fil_orig/")
-    # parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/supnat_eng_fil_orig")
-    # parser.add_argument("--training_stats_path", type=str, default="./trained_soft_prompts/SUPER-NATURALINSTRUCTIONS-english-filtered_original_instructions/training_stats.csv")
+    parser.add_argument("--val_dataset_path", type=str, default="./datasets/mapper_training_dataset/SUPER-NATURALINSTRUCTIONS-english-filtered_original_instructions/val_mapper_dataset.pt")
+    parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/SUPER-NATURALINSTRUCTIONS-english-filtered_original_instructions")
+    parser.add_argument("--training_stats_path", type=str, default="./trained_soft_prompts/SUPER-NATURALINSTRUCTIONS-english-filtered_original_instructions/training_stats.csv")
     parser.add_argument("--sample", action='store_true', help="Use a sample of val dataset instead of the full val dataset")
     parser.add_argument("--num_samples", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--num_tokens", type=int, default=20)
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--do-sample", action="store_true", help="Enable sampling decoding")
+    parser.add_argument("--output_json", type=str, default="./SupNatInstruct_verbalizations_original_instructions.json")
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
-    PROPORTION_FOLDER = f"{int(100*args.proportion_to_use)}_percent"
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-    VAL_DATASET_PATH = os.path.join(args.mapper_dataset_path, "val_mapper_dataset.pt")
-    LORA_DIR = os.path.join(args.mapper_dataset_path, "mapper_lora_weights", PROPORTION_FOLDER)
-    # TRAINING_STATS_PATH = args.training_stats_path
+    VAL_DATASET_PATH = args.val_dataset_path
+    LORA_DIR = args.lora_dir
+    TRAINING_STATS_PATH = args.training_stats_path
     BATCH_SIZE = args.batch_size
     NUM_SAMPLES = args.num_samples
     SEED = args.seed
     DO_SAMPLE = args.do_sample
-    # OUTPUT_JSON = args.output_json
-    OUTPUT_JSON = os.path.join(LORA_DIR, "verbalizations.json")
+    OUTPUT_JSON = args.output_json
 
     # Set the Seed for this experiment
     random.seed(SEED)
@@ -53,7 +51,7 @@ def run(args_list=None):
     DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
 
     # Load Training Stats
-    # TRAINING_STATS_DF = pd.read_csv(TRAINING_STATS_PATH, index_col='task_name')
+    TRAINING_STATS_DF = pd.read_csv(TRAINING_STATS_PATH, index_col='task_name')
 
     # Load Rouge Metric
     ROUGE_METRIC = evaluate.load("rouge")
@@ -82,10 +80,16 @@ def run(args_list=None):
 
     print(f"Loading base model {MODEL_NAME}...")
     base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=DTYPE, device_map=DEVICE)
+    llama_word_embeddings = base_model.get_input_embeddings()
 
     print(f"Loading LoRA adapters from {LORA_DIR}...")
     model = PeftModel.from_pretrained(base_model, LORA_DIR)
     model.eval()
+
+    with torch.no_grad():
+        SOFT_MARKER = llama_word_embeddings(tokenizer("<SOFT:>", add_special_tokens=False, return_tensors='pt').to(DEVICE)['input_ids']).detach()
+        HARD_MARKER = llama_word_embeddings(tokenizer("<HARD:>", add_special_tokens=False, return_tensors='pt').to(DEVICE)['input_ids']).detach()
+        INIT_MARKER = llama_word_embeddings(tokenizer("<INIT:>", add_special_tokens=False, return_tensors='pt').to(DEVICE)['input_ids']).detach()
 
     # ┌───────────────────────────────────────────────┐
     # │                 INFERENCE LOOP                │
@@ -108,12 +112,28 @@ def run(args_list=None):
             # Stack soft prompts: (batch_size, seq_len, embed_dim)
             soft_prompts = torch.stack([s["soft_prompt"] for s in batch_samples]).to(DEVICE, dtype=DTYPE)
             
-            # Create an attention mask for the batch: (batch_size, seq_len)
-            attention_mask = torch.ones(soft_prompts.shape[:2], dtype=torch.long, device=DEVICE)
+            # stack init embeddings
+            init = torch.stack([s["soft_prompt_init_embeddings"] for s in batch_samples]).to(DEVICE, dtype=DTYPE)
+
+            batchsize = soft_prompts.shape[0]
+            soft_marker = SOFT_MARKER.expand(batchsize, -1, -1)
+            hard_marker = HARD_MARKER.expand(batchsize, -1, -1)
+            init_marker = INIT_MARKER.expand(batchsize, -1, -1)
+
+            # build input sequence (init + soft)
+            inputs_embeds = torch.cat([init_marker, init, soft_marker, soft_prompts, hard_marker], dim=1)               # (batch_size, soft_prompt_len + seq_len, embed_dim)
+            prefix_len = init_marker.shape[1] + init.shape[1] + soft_marker.shape[1] + soft_prompts.shape[1] + hard_marker.shape[1]
+            
+            # build input sequence (soft)
+            # inputs_embeds = torch.cat([soft_marker, soft_prompts, hard_marker], dim=1)               # (batch_size, soft_prompt_len + seq_len, embed_dim)
+            # prefix_len = soft_marker.shape[1] + soft_prompts.shape[1] + hard_marker.shape[1]
+
+            # Concatenate Attention Masks (Add `1`s for the soft prompt so Llama Model pays attention to it)
+            attention_mask = torch.ones((batchsize, prefix_len), dtype=DTYPE, device=DEVICE)   # (batch_size, soft_prompt_len)
             
             # Generate the predicted tokens for the whole batch
             outputs = model.generate(
-                inputs_embeds=soft_prompts,
+                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 max_new_tokens=300,
                 do_sample=DO_SAMPLE,
@@ -141,12 +161,12 @@ def run(args_list=None):
             # Process and store results for each sample in the batch
             for j in range(len(batch_samples)):
                 task_name = task_names[j]
-                # task_rouge_l = TRAINING_STATS_DF.loc[task_name].get('val_rougeL', 'N/A')
+                task_rouge_l = TRAINING_STATS_DF.loc[task_name].get('val_rougeL', 'N/A')
                 results_data.append({
                     "task_name": task_name,
                     "hard_prompt": hard_prompts[j],
                     "verbalization": pred_texts[j],
-                    # "task_rouge_l": task_rouge_l,
+                    "task_rouge_l": task_rouge_l,
                     "verbalization_rouge_l": rouge_l_scores[j],
                     "instances": instances_list[j]
                 })

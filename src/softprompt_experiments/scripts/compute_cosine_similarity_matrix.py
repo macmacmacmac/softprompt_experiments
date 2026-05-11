@@ -19,14 +19,16 @@ def run(args_list=None):
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
     parser.add_argument("--proportion_to_use", type=float, default=1.0)
-    parser.add_argument("--mapper_dataset_path", type=str, default="./datasets/mapper_training_dataset/supnat_eng_fil_orig/")
+    parser.add_argument("--mapper_dataset_path", type=str, default="supnat_eng_fil_orig")
     # parser.add_argument("--verbalization_json_path", type=str, default="./SupNatInstruct_verbalizations_original_instructions.json")
     parser.add_argument("--embed_model_name", type=str, default="all-MiniLM-L6-v2")
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
+    MAPPER_DATASET_PATH = os.path.join('./datasets/mapper_training_dataset',args.mapper_dataset_path)
     PROPORTION_FOLDER = f"{int(100*args.proportion_to_use)}_percent"
-    VERBALIZATION_JSON_PATH = os.path.join(args.mapper_dataset_path, "mapper_lora_weights", PROPORTION_FOLDER, "verbalizations.json")
+    LORA_DIR = os.path.join(MAPPER_DATASET_PATH, "mapper_lora_weights", PROPORTION_FOLDER)
+    VERBALIZATION_JSON_PATH = os.path.join(LORA_DIR, "verbalizations.json")
     EMBED_MODEL_NAME = args.embed_model_name
 
     print(f"Loading data from {VERBALIZATION_JSON_PATH}...")

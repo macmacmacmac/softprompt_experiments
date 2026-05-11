@@ -35,8 +35,9 @@ def run(args_list=None):
     # Parse all the arguments into Variables
     PROPORTION_FOLDER = f"{int(100*args.proportion_to_use)}_percent"
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-    VAL_DATASET_PATH = os.path.join(args.mapper_dataset_path, "val_mapper_dataset.pt")
-    LORA_DIR = os.path.join(args.mapper_dataset_path, "mapper_lora_weights", PROPORTION_FOLDER)
+    MAPPER_DATASET_PATH = os.path.join('./datasets/mapper_training_dataset',args.mapper_dataset_path)
+    VAL_DATASET_PATH = os.path.join(MAPPER_DATASET_PATH, "val_mapper_dataset.pt")
+    LORA_DIR = os.path.join(MAPPER_DATASET_PATH, "mapper_lora_weights", PROPORTION_FOLDER)
     # TRAINING_STATS_PATH = args.training_stats_path
     BATCH_SIZE = args.batch_size
     NUM_SAMPLES = args.num_samples
