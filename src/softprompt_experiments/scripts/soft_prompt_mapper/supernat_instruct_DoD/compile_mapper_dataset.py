@@ -4,6 +4,7 @@ from tqdm import tqdm
 import torch
 from datasets import load_dataset
 from typing import List, Dict, Any
+import random
 
 
 def compile_data_list(dataset_records: List[Dict[str, Any]], 
@@ -78,7 +79,7 @@ def run(args_list):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_path", type=str, default="Suryanshg/SUPER-NATURALINSTRUCTIONS-english-filtered")
+    parser.add_argument("--dataset_path", type=str, default="Suryanshg/SUPER-NATURALINSTRUCTIONS-english-filtered-100x-augmented")
     parser.add_argument("--trained_soft_prompts_dir", type=str, default="./trained_soft_prompts")
     parser.add_argument("--compiled_dataset_dir", type=str, default="./datasets/mapper_training_dataset")
     parser.add_argument("--num_instances", type=int, default=10)
@@ -103,10 +104,20 @@ def run(args_list):
     test_dataset_df = hf_dataset['test'].to_pandas()
 
     # Add instruction field to reduced_instructions for train_df
-    # train_dataset_df['reduced_instructions'] = train_dataset_df.apply(
-    #     lambda row: list(row['reduced_instructions']) + [row['instruction']],
-    #     axis=1 # Apply row by row
+    train_dataset_df['reduced_instructions'] = train_dataset_df.apply(
+        lambda row: list(row['reduced_instructions']) + [row['instruction']],
+        axis=1 # Apply row by row
+    )
+
+
+    # # Pick only 1 augmentation hard Prompt
+    # # Sample 1 reduced_instruction per task_name
+    # sampled_instructions = train_dataset_df.groupby('task_name')['reduced_instructions'].first().apply(
+    #     lambda row: random.sample(list(row), 1)
     # )
+    
+    # # Map the chosen sampled instruction back to all rows of the corresponding task
+    # train_dataset_df['reduced_instructions'] = train_dataset_df['task_name'].map(sampled_instructions)
     
     # Drop the instruction column in train_df and reduced_instructions in test_df
     train_dataset_df = train_dataset_df.drop(columns=['instruction'], axis=1)
@@ -147,7 +158,7 @@ def run(args_list):
 
     # Create the Directory for saving the datasets
     # save_dir = os.path.join(COMPILED_DATASET_DIR, DATASET_NAME)
-    save_dir = os.path.join(COMPILED_DATASET_DIR, DATASET_NAME + "-augmented-without-original")
+    save_dir = os.path.join(COMPILED_DATASET_DIR, DATASET_NAME)
     os.makedirs(save_dir, exist_ok=True)
     
     # Save the Training and Validation Datasets

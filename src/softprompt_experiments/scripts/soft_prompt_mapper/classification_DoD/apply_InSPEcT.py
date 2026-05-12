@@ -132,7 +132,8 @@ def run(args_list=None):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--inspect_soft_prompts_dir", type=str, default="./inspect_soft_prompts_peft")
+    parser.add_argument("--inspect_soft_prompts_dir", type=str, default="./inspect_soft_prompts")
+    parser.add_argument("--results_save_dir", type=str, default="./inspect_results/inspect_soft_prompts_custom")
     parser.add_argument("--num_tokens", type=int, default=20)
     parser.add_argument("--peft", action="store_true", help="Use PEFT style way of loading soft prompts")
     args, _ = parser.parse_known_args(args_list)
@@ -142,6 +143,7 @@ def run(args_list=None):
     INSPECT_SOFT_PROMPTS_DIR = args.inspect_soft_prompts_dir
     NUM_TOKENS = args.num_tokens
     LOAD_LIKE_PEFT = args.peft
+    RESULTS_SAVE_DIR = args.results_save_dir
 
     # Determine DEVICE and DTYPE
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -188,9 +190,9 @@ def run(args_list=None):
                     # weights_only=True is a PyTorch security best practice for loading tensors
                     state_dict = torch.load(soft_prompt_path, map_location = "cpu", weights_only = True)
                     
-                    # Extract the prompt embeddings. 
-                    # The SoftPrompt class saves it as shape (1, soft_prompt_len, embed_dim).
-                    soft_prompt = state_dict['prompt_embeddings']
+                    # Extract the prompt embeddings
+                    soft_prompt = state_dict['prompt_embeddings']       # (1, soft_prompt_len, embed_dim)
+                    soft_prompt = soft_prompt.squeeze(0)                # (soft_prompt_len, embed_dim)
 
 
                 print("-" * 100)
@@ -231,11 +233,10 @@ def run(args_list=None):
                 training_stats_df = TRAINING_STATS_DF[TRAINING_STATS_DF["dataset_id"].str.contains(dataset_name)]
 
                 # Save Elicitations using InSPEcT for this dataset
-                elicitation_save_dir = os.path.join("inspect_results",INSPECT_SOFT_PROMPTS_DIR)
-                os.makedirs(elicitation_save_dir, exist_ok=True)
+                os.makedirs(RESULTS_SAVE_DIR, exist_ok=True)
 
                 df = pd.DataFrame(inspect_elicited_results)
-                df.to_csv(f'{elicitation_save_dir}/{dataset_name}_elicitations.csv', index=False)
+                df.to_csv(f'{RESULTS_SAVE_DIR}/{dataset_name}_elicitations.csv', index=False)
 
                 result_entry = {
                     "dataset": dataset_name,
@@ -257,9 +258,7 @@ def run(args_list=None):
             break
 
     if summary_results:
-        summary_save_dir = os.path.join("inspect_results",INSPECT_SOFT_PROMPTS_DIR)
-        os.makedirs(summary_save_dir, exist_ok=True)
         summary_df = pd.DataFrame(summary_results)
-        summary_csv_path = f"{summary_save_dir}/inspect_summary.csv"
+        summary_csv_path = f"{RESULTS_SAVE_DIR}/inspect_summary.csv"
         summary_df.to_csv(summary_csv_path, index=False)
         print(f"\nSaved master summary with best metrics to: {summary_csv_path}")

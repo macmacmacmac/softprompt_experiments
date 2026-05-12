@@ -332,48 +332,6 @@ def eval_soft_prompts(model,
     return eval_loss, eval_correct
 
 
-
-# # Performs Evaluation Based on Exact Sequence Match
-# def eval_soft_prompts(model, eval_dataloader, num_tokens, device):
-    
-#     # Set model to evaluation mode
-#     model.eval()                          
-#     eval_loss = 0
-#     eval_correct = 0
-    
-#     for batch in tqdm(eval_dataloader):
-#         batch = {k: v.to(device) for k, v in batch.items()}
-#         with torch.no_grad():
-#             outputs = model(**batch)
-            
-#         loss = outputs.loss
-#         eval_loss += loss.detach().float()
-        
-#         # --- THE FIX: SHIFT LOGITS AND LABELS ---
-#         logits = outputs.logits
-#         labels = batch["labels"]
-        
-#         shifted_logits = logits[..., :-1, :].contiguous()
-#         shifted_labels = labels[..., 1:].contiguous()
-        
-#         # Get the predicted token ids
-#         preds = torch.argmax(shifted_logits, dim=-1)
-        
-#         # Create a mask to ignore the -100 padding tokens
-#         valid_mask = (shifted_labels != -100)
-        
-#         # Check where predictions exactly match the labels
-#         correct_tokens = (preds == shifted_labels) & valid_mask
-        
-#         # For strict classification accuracy, the ENTIRE sequence must be correct.
-#         # If the number of correct tokens equals the number of valid target tokens, it's a perfect match!
-#         correct_seqs = correct_tokens.sum(dim=1) == valid_mask.sum(dim=1)
-        
-#         eval_correct += correct_seqs.sum().item()
-    
-#     return eval_loss, eval_correct
-
-
 # ┌───────────────────────────────────────────────┐
 # │                 DRIVER CODE                   │
 # └───────────────────────────────────────────────┘
@@ -387,12 +345,13 @@ def run(args_list=None):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts_peft")
+    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts_peft_llama_2")
     parser.add_argument("--num_tokens", type=int, default=20)
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
-    MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+    # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+    MODEL_NAME = "meta-llama/Llama-2-7b-hf"
     SAVE_DIR = args.save_dir
     NUM_TOKENS = args.num_tokens
 
@@ -409,6 +368,7 @@ def run(args_list=None):
     prompt_tuning_config = PromptTuningConfig(
         task_type=TaskType.CAUSAL_LM,
         prompt_tuning_init=PromptTuningInit.RANDOM, # Random Weight Init for Prompt Tuning Params
+        # prompt_tuning_init=PromptTuningInit.SAMPLE_VOCAB, # Sampling from the Model's Vocab for Init
         num_virtual_tokens=NUM_TOKENS,
         tokenizer_name_or_path=MODEL_NAME
     )
