@@ -283,7 +283,7 @@ def run(args_list):
 
     # Create Parent Directory to save all soft prompts for this Dataset
     DB_NAME = DB_PATH.split("/")[-1].split(".")[0]
-    PARENT_DIR = f"{SAVE_DIR}/{DB_NAME}_peft"
+    PARENT_DIR = f"{SAVE_DIR}/{DB_NAME}_peft_sample_vocab"
     os.makedirs(PARENT_DIR, exist_ok=True)
 
 
@@ -397,7 +397,8 @@ def run(args_list):
 
         peft_config = PromptTuningConfig(
             task_type=TaskType.CAUSAL_LM,
-            prompt_tuning_init=PromptTuningInit.RANDOM,
+            # prompt_tuning_init=PromptTuningInit.RANDOM,
+            prompt_tuning_init=PromptTuningInit.SAMPLE_VOCAB,
             num_virtual_tokens=NUM_TOKENS,
             tokenizer_name_or_path=MODEL_NAME
         )

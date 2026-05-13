@@ -21,24 +21,24 @@ COMMON_TEXT_LABEL = "text_label"
 
 # Inspect Dataset specific configs
 INSPECT_DATASET_CONFIGS = {
-    "stanfordnlp/sst2": {
-        "epochs": 8,
-        "lr": 8e-4,
-        "batch_size": 8,
-        "eval_split": "validation",
-        "text_column": "sentence",
-        "label_column": "label",
-        "classes": ["negative", "positive"]
-    },
-    "SetFit/sst5": {
-        "epochs": 12,
-        "lr": 6e-3,
-        "batch_size": 8,
-        "eval_split": "validation",
-        "text_column": "text",
-        "label_column": "label",
-        "classes": ["terrible", "bad", "neutral", "good", "great"]
-    },
+    # "stanfordnlp/sst2": {
+    #     "epochs": 8,
+    #     "lr": 8e-4,
+    #     "batch_size": 8,
+    #     "eval_split": "validation",
+    #     "text_column": "sentence",
+    #     "label_column": "label",
+    #     "classes": ["negative", "positive"]
+    # },
+    # "SetFit/sst5": {
+    #     "epochs": 12,
+    #     "lr": 6e-3,
+    #     "batch_size": 8,
+    #     "eval_split": "validation",
+    #     "text_column": "text",
+    #     "label_column": "label",
+    #     "classes": ["terrible", "bad", "neutral", "good", "great"]
+    # },
     "fancyzhx/ag_news": {
         "epochs": 8,
         "lr": 8e-3,
@@ -48,24 +48,24 @@ INSPECT_DATASET_CONFIGS = {
         "label_column": "label",
         "classes": ["world", "sports", "business", "technology"]
     },
-    "SetFit/subj": {
-        "epochs": 8,
-        "lr": 8e-3,
-        "batch_size": 8,
-        "eval_split": "test",
-        "text_column": "text",
-        "label_column": "label",
-        "classes": ["objective", "subjective"]
-    },
-    "SetFit/TREC-QC": {
-        "epochs": 20,
-        "lr": 8e-4,
-        "batch_size": 8,
-        "eval_split": "test",
-        "text_column": "text",
-        "label_column": "label_coarse",
-        "classes": ["description", "entity", "abbreviation", "human", "number", "location"]
-    }
+    # "SetFit/subj": {
+    #     "epochs": 8,
+    #     "lr": 8e-3,
+    #     "batch_size": 8,
+    #     "eval_split": "test",
+    #     "text_column": "text",
+    #     "label_column": "label",
+    #     "classes": ["objective", "subjective"]
+    # },
+    # "SetFit/TREC-QC": {
+    #     "epochs": 20,
+    #     "lr": 8e-4,
+    #     "batch_size": 8,
+    #     "eval_split": "test",
+    #     "text_column": "text",
+    #     "label_column": "label_coarse",
+    #     "classes": ["description", "entity", "abbreviation", "human", "number", "location"]
+    # }
 }
 
 # ┌───────────────────────────────────────────────┐
@@ -233,6 +233,11 @@ def train_soft_prompts(model,
         num_training_steps=(len(train_dataloader) * num_epochs),
     )
 
+
+    example = next(iter(train_dataloader))
+    print(example)
+    exit()
+
     # Loop num_epochs times
     for epoch in range(num_epochs):
 
@@ -294,6 +299,22 @@ def train_soft_prompts(model,
     torch.save(trainable_params, os.path.join(soft_prompt_save_dir, "softprompt.pt"))
     tqdm.write(f"\nTraining complete! Soft prompt saved to {soft_prompt_save_dir}/softprompt.pt")
 
+
+    # # Raw Soft Prompts
+    # raw_soft_prompt = trainable_params
+
+    # # Extract the base model
+    # base_model = model.base_model
+
+    # # TODO: Randomly sample input example (can be a batch) from Train Loader
+    # input_example = next(iter(train_dataloader))
+
+    # # TODO: Pass soft prompt + input to Base Model
+
+    # # TODO: Pass input to Peft Model
+
+    # # Compare 
+
     return {
         "train_accuracy": round(train_accuracy * 100, 4),
         "val_accuracy": round(val_accuracy * 100, 4),
@@ -345,13 +366,13 @@ def run(args_list=None):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts_peft_llama_2")
+    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts_test")
     parser.add_argument("--num_tokens", type=int, default=20)
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
-    # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-    MODEL_NAME = "meta-llama/Llama-2-7b-hf"
+    MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+    # MODEL_NAME = "meta-llama/Llama-2-7b-hf"
     SAVE_DIR = args.save_dir
     NUM_TOKENS = args.num_tokens
 
