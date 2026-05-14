@@ -162,6 +162,7 @@ def run(args_list):
 
     # Create Parent Directory to save all soft prompts for this Dataset
     DB_NAME = DB_PATH.split("/")[-1].split(".")[0]
+    DB_NAME = DB_NAME + "_custom_sample_vocab"
     PARENT_DIR = f"{SAVE_DIR}/{DB_NAME}"
     os.makedirs(PARENT_DIR, exist_ok=True)
 
@@ -282,7 +283,8 @@ def run(args_list):
             model = llama_model,
             tokenizer = llama_tokenizer,
             word_embeddings = llama_word_embeddings,
-            num_tokens = NUM_TOKENS
+            num_tokens = NUM_TOKENS,
+            # init_randomly=True
         ).to(DEVICE)
 
         # Init Optimizer with only params from Soft Prompt

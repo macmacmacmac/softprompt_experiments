@@ -1,14 +1,17 @@
 import random
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from tqdm import tqdm
 from typing import List, Dict
-
+import pickle
 
 # Determine DEVICE and DTYPE
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
+
+# Load Few Shot Example Instructions 
+with open('./paraphrased_instructions_few_shot_pool.pkl', 'rb') as f:
+    SUPERNAT_PARAPHRASED_INSTRUCTIONS = pickle.load(f)
 
 # Few Shot Examples for Classification for creating Target Prompts
 FEW_SHOT_EXAMPLES = [
@@ -33,6 +36,8 @@ FEW_SHOT_EXAMPLES_DOD = [
     "left or right"   
 ]
 
+# TODO: Load all Unique Instructions from the Super-NaturalInstructions dataset
+
 
 # Combination of All Layers for Patchscopes Experiment
 ALL_LAYER_COMBINATIONS = [
@@ -47,7 +52,7 @@ BEST_PATCHES = [
     # {"min_source": 5, "max_source": 5, "min_target": 24, "max_target": 24},
     # {"min_source": 6, "max_source": 6, "min_target": 26, "max_target": 26},
     # {"min_source": 22, "max_source": 22, "min_target": 28, "max_target": 28},
-    {"min_source": 13, "max_source": 15, "min_target": 24, "max_target": 26}
+    {"min_source": 13, "max_source": 15, "min_target": 13, "max_target": 15}
 ]
 
 
@@ -123,6 +128,8 @@ def create_target_prompt(num_tokens: int, target_prompt_type: str, dataset_name:
     match target_prompt_type:
         case 'few_shot':
             return create_few_shot_prompt(num_tokens)
+        case 'few_shot_supernat':
+            return create_few_shot_prompt_super_nat(num_tokens)
         case 'cot':
             # Find a random test example from the test dataset 
             # TODO: Change this to the DoD dataset instead of using InSPEcT datasets, as the soft prompt is trained on DoD
@@ -140,6 +147,15 @@ def create_few_shot_prompt(num_tokens, separator='|', seed=47):
     selected_examples = random.sample(FEW_SHOT_EXAMPLES, 3)
     separator = " " + separator + " "
     prompt = separator.join(selected_examples) + separator[:-1] + " x" * num_tokens
+    return prompt
+
+
+def create_few_shot_prompt_super_nat(num_tokens, separator='|', seed=47):
+    random.seed(seed)
+    selected_examples = random.sample(SUPERNAT_PARAPHRASED_INSTRUCTIONS, 3)
+    separator = " " + separator + " "
+    prompt = separator.join(selected_examples) + separator[:-1] + " x" * num_tokens
+    print(f"Super Natural Few Shot Target Prompt: \n{prompt}")
     return prompt
 
 

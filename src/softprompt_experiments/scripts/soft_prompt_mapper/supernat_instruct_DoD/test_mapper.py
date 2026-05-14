@@ -20,16 +20,8 @@ def run(args_list=None):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-<<<<<<< HEAD
     parser.add_argument("--proportion_to_use", type=float, default=1.0)
     parser.add_argument("--mapper_dataset_path", type=str, default="./datasets/mapper_training_dataset/supnat_eng_fil_orig/")
-    # parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/supnat_eng_fil_orig")
-    # parser.add_argument("--training_stats_path", type=str, default="./trained_soft_prompts/SUPER-NATURALINSTRUCTIONS-english-filtered_original_instructions/training_stats.csv")
-=======
-    parser.add_argument("--val_dataset_path", type=str, default="./datasets/mapper_training_dataset/SUPER-NATURALINSTRUCTIONS-english-filtered_original_instructions/val_mapper_dataset.pt")
-    parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/SUPER-NATURALINSTRUCTIONS-english-filtered_original_instructions")
-    parser.add_argument("--training_stats_path", type=str, default="./trained_soft_prompts/SUPER-NATURALINSTRUCTIONS-english-filtered/training_stats.csv")
->>>>>>> b5bdc9c0966843a111c3e8d93f2e38cf8fca06a8
     parser.add_argument("--sample", action='store_true', help="Use a sample of val dataset instead of the full val dataset")
     parser.add_argument("--num_samples", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=16)
@@ -39,16 +31,14 @@ def run(args_list=None):
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
-    PROPORTION_FOLDER = f"{int(100*args.proportion_to_use)}_percent"
+    PROPORTION_FOLDER = f"{int(100 * args.proportion_to_use)}_percent"
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     VAL_DATASET_PATH = os.path.join(args.mapper_dataset_path, "val_mapper_dataset.pt")
     LORA_DIR = os.path.join(args.mapper_dataset_path, "mapper_lora_weights", PROPORTION_FOLDER)
-    # TRAINING_STATS_PATH = args.training_stats_path
     BATCH_SIZE = args.batch_size
     NUM_SAMPLES = args.num_samples
     SEED = args.seed
     DO_SAMPLE = args.do_sample
-    # OUTPUT_JSON = args.output_json
     OUTPUT_JSON = os.path.join(LORA_DIR, "verbalizations.json")
 
     # Set the Seed for this experiment
@@ -57,9 +47,6 @@ def run(args_list=None):
     # Determine DEVICE and DTYPE
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
-
-    # Load Training Stats
-    # TRAINING_STATS_DF = pd.read_csv(TRAINING_STATS_PATH, index_col='task_name')
 
     # Load Rouge Metric
     ROUGE_METRIC = evaluate.load("rouge")
@@ -147,12 +134,10 @@ def run(args_list=None):
             # Process and store results for each sample in the batch
             for j in range(len(batch_samples)):
                 task_name = task_names[j]
-                # task_rouge_l = TRAINING_STATS_DF.loc[task_name].get('val_rougeL', 'N/A')
                 results_data.append({
                     "task_name": task_name,
                     "hard_prompt": hard_prompts[j],
                     "verbalization": pred_texts[j],
-                    # "task_rouge_l": task_rouge_l,
                     "verbalization_rouge_l": rouge_l_scores[j],
                     "instances": instances_list[j]
                 })

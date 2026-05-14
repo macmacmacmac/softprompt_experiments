@@ -174,28 +174,16 @@ def run(args_list):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--min_delta", type=float, default=0.001)
     parser.add_argument("--num_tokens", type=int, default=20)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts")
-    parser.add_argument("--use_custom_train_configs", action="store_true", help="Use Dataset specific training configs")
+    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts_custom_sample_vocab")
     parser.add_argument("--seed", type=int, default=47)
     args, _ = parser.parse_known_args(args_list)
     
 
     # Parse all the arguments into Variables
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-    DEFAULT_LR = args.lr
-    DEFAULT_EPOCHS = args.epochs
     NUM_TOKENS = args.num_tokens
-    DEFAULT_BATCH_SIZE = args.batch_size
     SAVE_DIR = args.save_dir
-    PATIENCE = args.patience
-    MIN_DELTA = args.min_delta
-    USE_CUSTOM_TRAIN_CONFIGS = args.use_custom_train_configs
 
 
     # Determine DEVICE and DTYPE
@@ -260,9 +248,9 @@ def run(args_list):
         configs = INSPECT_DATASET_CONFIGS[dataset_id]
 
         # Training Configs
-        epochs = configs["epochs"] if USE_CUSTOM_TRAIN_CONFIGS else DEFAULT_EPOCHS
-        lr = configs["lr"] if USE_CUSTOM_TRAIN_CONFIGS else DEFAULT_LR
-        batch_size = configs["batch_size"] if USE_CUSTOM_TRAIN_CONFIGS else DEFAULT_BATCH_SIZE
+        epochs = configs["epochs"]
+        lr = configs["lr"]
+        batch_size = configs["batch_size"]
 
         # General Configs
         eval_split = configs["eval_split"]
@@ -318,6 +306,7 @@ def run(args_list):
             model = llama_model,
             tokenizer = llama_tokenizer,
             word_embeddings = llama_word_embeddings,
+            # init_randomly=True,
             num_tokens = NUM_TOKENS
         ).to(DEVICE)
 
@@ -328,14 +317,6 @@ def run(args_list):
         # │                 TRAINING LOOP                 │
         # └───────────────────────────────────────────────┘
         tqdm.write(f"\n--- Starting training for Dataset {dataset_id} ---")
-
-        # Early Stopping Variables
-        epochs_no_improve = 0
-        best_soft_prompt_state = None
-        best_val_loss = float('inf')
-        best_val_accuracy = 0
-        best_train_loss = float('inf')
-        best_train_accuracy = 0
 
         # Loop EPOCHS times (or unitl Early Stopping triggers)
         for epoch in range(epochs):
@@ -470,39 +451,11 @@ def run(args_list):
             tqdm.write(f"\nEpoch {epoch + 1} Summary:")
             tqdm.write(f"Train -> Loss: {avg_train_loss: .4f} | Accuracy: {train_accuracy: .2f}%")
             tqdm.write(f"Val   -> Loss: {avg_val_loss: .4f} | Accuracy: {val_accuracy: .2f}%")
-
-            # TODO: Improve the logic here by stopping early when testing accuracy reaches 90%
-            # ┌───────────────────────────────────────────────┐
-            # │               EARLY STOPPING LOGIC            │
-            # └───────────────────────────────────────────────┘
-            # Check if the current validation loss is better than our best so far
-            if avg_val_loss < (best_val_loss - MIN_DELTA):
-                best_val_loss = avg_val_loss
-                best_val_accuracy = val_accuracy
-                best_train_loss = avg_train_loss
-                best_train_accuracy = train_accuracy
-                epochs_no_improve = 0
-                
-                # Save a copy of the best weights in memory
-                best_soft_prompt_state = {k: v.cpu().clone() for k, v in soft_prompt.state_dict().items()}
-                tqdm.write(f"  --> Validation loss improved! Saving current state.")
-            else:
-                epochs_no_improve += 1
-                tqdm.write(f"  --> No improvement. Patience: {epochs_no_improve}/{PATIENCE}")
-
-            # Trigger Early Stopping
-            if epochs_no_improve >= PATIENCE:
-                tqdm.write(f"\n[Early Stopping Triggered] Convergence reached at epoch {epoch + 1}.")
-                break
             
         # ┌───────────────────────────────────────────────┐
         # │              SAVE SOFT PROMPTS                │
         # └───────────────────────────────────────────────┘
         os.makedirs(save_dir, exist_ok=True)
-
-        # Load the best state back into the model before saving
-        if best_soft_prompt_state is not None:
-            soft_prompt.load_state_dict(best_soft_prompt_state)
 
         soft_prompt.save_softprompt(save_dir)
         tqdm.write(f"\nTraining complete! Soft prompt saved to {save_dir}/softprompt.pt")
@@ -514,16 +467,16 @@ def run(args_list):
         # Check if current dataset id exists:
         if dataset_id in training_stats['dataset_id']:
             idx = training_stats['dataset_id'].index(dataset_id)
-            training_stats['train_accuracy'][idx] = round(best_train_accuracy, 4)
-            training_stats['val_accuracy'][idx] = round(best_val_accuracy, 4)
-            training_stats['avg_train_loss'][idx] = round(best_train_loss, 4)
-            training_stats['avg_val_loss'][idx] = round(best_val_loss, 4)
+            training_stats['train_accuracy'][idx] = round(train_accuracy, 4)
+            training_stats['val_accuracy'][idx] = round(val_accuracy, 4)
+            training_stats['avg_train_loss'][idx] = round(avg_train_loss, 4)
+            training_stats['avg_val_loss'][idx] = round(avg_val_loss, 4)
         else:
             training_stats['dataset_id'].append(dataset_id)
-            training_stats['train_accuracy'].append(round(best_train_accuracy, 4))
-            training_stats['val_accuracy'].append(round(best_val_accuracy, 4))
-            training_stats['avg_train_loss'].append(round(best_train_loss, 4))
-            training_stats['avg_val_loss'].append(round(best_val_loss, 4))
+            training_stats['train_accuracy'].append(round(train_accuracy, 4))
+            training_stats['val_accuracy'].append(round(val_accuracy, 4))
+            training_stats['avg_train_loss'].append(round(avg_train_loss, 4))
+            training_stats['avg_val_loss'].append(round(avg_val_loss, 4))
 
         # Save the CSV file with training stats
         df = pd.DataFrame(training_stats)

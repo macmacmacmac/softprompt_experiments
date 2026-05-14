@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH -N 1
 #SBATCH -n 8
-#SBATCH --mem=32g
-#SBATCH -J "DoD2"
-#SBATCH -p long
-#SBATCH -t 5-00:00:00
+#SBATCH --mem=16g
+#SBATCH -J "16bitPeftRandom"
+#SBATCH -p short
+#SBATCH -t 1-00:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -C A100
-#SBATCH -o logs.out
-#SBATCH -e logs.out
+#SBATCH -o 16bit_peft_random_logs.out
+#SBATCH -e 16bit_peft_random_logs.out
 
 # -----------------------------
 # Load Required Modules
@@ -39,4 +39,4 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 # -----------------------------
 # python -u -m run_experiment --scripts soft_prompt_mapper.supernat_instruct_DoD.train_softprompts_peft
 # python -u -m run_experiment --scripts soft_prompt_mapper.supernat_instruct_DoD.generate_paraphrasals
-python -u -m run_experiment --scripts soft_prompt_mapper.classification_DoD.train_DoD_softprompts_peft
+python -u -m run_experiment --scripts soft_prompt_mapper.classification_DoD.train_InSPEcT_softprompts_peft

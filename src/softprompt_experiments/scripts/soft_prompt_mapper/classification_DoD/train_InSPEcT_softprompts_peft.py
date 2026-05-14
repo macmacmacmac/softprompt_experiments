@@ -21,24 +21,24 @@ COMMON_TEXT_LABEL = "text_label"
 
 # Inspect Dataset specific configs
 INSPECT_DATASET_CONFIGS = {
-    # "stanfordnlp/sst2": {
-    #     "epochs": 8,
-    #     "lr": 8e-4,
-    #     "batch_size": 8,
-    #     "eval_split": "validation",
-    #     "text_column": "sentence",
-    #     "label_column": "label",
-    #     "classes": ["negative", "positive"]
-    # },
-    # "SetFit/sst5": {
-    #     "epochs": 12,
-    #     "lr": 6e-3,
-    #     "batch_size": 8,
-    #     "eval_split": "validation",
-    #     "text_column": "text",
-    #     "label_column": "label",
-    #     "classes": ["terrible", "bad", "neutral", "good", "great"]
-    # },
+    "stanfordnlp/sst2": {
+        "epochs": 8,
+        "lr": 8e-4,
+        "batch_size": 8,
+        "eval_split": "validation",
+        "text_column": "sentence",
+        "label_column": "label",
+        "classes": ["negative", "positive"]
+    },
+    "SetFit/sst5": {
+        "epochs": 12,
+        "lr": 6e-3,
+        "batch_size": 8,
+        "eval_split": "validation",
+        "text_column": "text",
+        "label_column": "label",
+        "classes": ["terrible", "bad", "neutral", "good", "great"]
+    },
     "fancyzhx/ag_news": {
         "epochs": 8,
         "lr": 8e-3,
@@ -48,24 +48,24 @@ INSPECT_DATASET_CONFIGS = {
         "label_column": "label",
         "classes": ["world", "sports", "business", "technology"]
     },
-    # "SetFit/subj": {
-    #     "epochs": 8,
-    #     "lr": 8e-3,
-    #     "batch_size": 8,
-    #     "eval_split": "test",
-    #     "text_column": "text",
-    #     "label_column": "label",
-    #     "classes": ["objective", "subjective"]
-    # },
-    # "SetFit/TREC-QC": {
-    #     "epochs": 20,
-    #     "lr": 8e-4,
-    #     "batch_size": 8,
-    #     "eval_split": "test",
-    #     "text_column": "text",
-    #     "label_column": "label_coarse",
-    #     "classes": ["description", "entity", "abbreviation", "human", "number", "location"]
-    # }
+    "SetFit/subj": {
+        "epochs": 8,
+        "lr": 8e-3,
+        "batch_size": 8,
+        "eval_split": "test",
+        "text_column": "text",
+        "label_column": "label",
+        "classes": ["objective", "subjective"]
+    },
+    "SetFit/TREC-QC": {
+        "epochs": 20,
+        "lr": 8e-4,
+        "batch_size": 8,
+        "eval_split": "test",
+        "text_column": "text",
+        "label_column": "label_coarse",
+        "classes": ["description", "entity", "abbreviation", "human", "number", "location"]
+    }
 }
 
 # ┌───────────────────────────────────────────────┐
@@ -212,7 +212,7 @@ def construct_soft_prompt_save_dir_path(dataset_name, save_dir, num_tokens):
     return f"{save_dir}/{dataset_name}_{num_tokens}tokens"
 
 
-def train_soft_prompts(model, 
+def train_soft_prompts(peft_model, 
                        train_dataloader, 
                        eval_dataloader, 
                        num_tokens, 
@@ -224,7 +224,7 @@ def train_soft_prompts(model,
     ):
     
     # Init Optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(peft_model.parameters(), lr=lr)
 
     # Init Linear Scheduler for Learning Rate
     lr_scheduler = get_linear_schedule_with_warmup(
@@ -233,16 +233,11 @@ def train_soft_prompts(model,
         num_training_steps=(len(train_dataloader) * num_epochs),
     )
 
-
-    example = next(iter(train_dataloader))
-    print(example)
-    exit()
-
     # Loop num_epochs times
     for epoch in range(num_epochs):
 
         # Set the model on training mode
-        model.train()
+        peft_model.train()
 
         # Calculate total loss
         total_loss = 0
@@ -258,7 +253,7 @@ def train_soft_prompts(model,
             batch = {k: v.to(device) for k, v in batch.items()}
 
             # Forward Pass Thru the model
-            outputs = model(**batch)
+            outputs = peft_model(**batch)
 
             # Extract Loss and accumulate it to the total loss
             loss = outputs.loss
@@ -279,7 +274,7 @@ def train_soft_prompts(model,
             lr_scheduler.step()
         
         # Eval Model at the end of this epoch in terms of loss and correctness
-        eval_loss, eval_correct = eval_soft_prompts(model, eval_dataloader, num_tokens, device)
+        eval_loss, eval_correct = eval_soft_prompts(peft_model, eval_dataloader, num_tokens, device)
 
         # Calculate Val and Train accuracy
         val_accuracy = eval_correct / len(eval_dataloader.dataset)
@@ -293,27 +288,15 @@ def train_soft_prompts(model,
         tqdm.write(f"Train -> Loss: {avg_train_loss: .4f} | Accuracy: {train_accuracy * 100: .2f}%")
         tqdm.write(f"Val   -> Loss: {avg_val_loss: .4f} | Accuracy: {val_accuracy * 100: .2f}%")
 
-    # Save the trained soft prompt
+    # Save the raw trained soft prompt
     os.makedirs(soft_prompt_save_dir, exist_ok=True)
-    trainable_params = [p for p in model.parameters() if p.requires_grad][0]
+    trainable_params = [p for p in peft_model.parameters() if p.requires_grad][0]
+    print(f"Extracted soft prompts from peft model dtype: {trainable_params.dtype}")
     torch.save(trainable_params, os.path.join(soft_prompt_save_dir, "softprompt.pt"))
     tqdm.write(f"\nTraining complete! Soft prompt saved to {soft_prompt_save_dir}/softprompt.pt")
 
-
-    # # Raw Soft Prompts
-    # raw_soft_prompt = trainable_params
-
-    # # Extract the base model
-    # base_model = model.base_model
-
-    # # TODO: Randomly sample input example (can be a batch) from Train Loader
-    # input_example = next(iter(train_dataloader))
-
-    # # TODO: Pass soft prompt + input to Base Model
-
-    # # TODO: Pass input to Peft Model
-
-    # # Compare 
+    # Save the peft model
+    # peft_model.save_pretrained(soft_prompt_save_dir)
 
     return {
         "train_accuracy": round(train_accuracy * 100, 4),
@@ -366,7 +349,7 @@ def run(args_list=None):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts_test")
+    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts_peft_random_16bit")
     parser.add_argument("--num_tokens", type=int, default=20)
     args, _ = parser.parse_known_args(args_list)
 
@@ -434,14 +417,17 @@ def run(args_list=None):
         base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=DTYPE, device_map=DEVICE)
 
         # Prepare Soft Prompt Model
-        soft_prompt_model = get_peft_model(base_model, prompt_tuning_config)
+        soft_prompt_model = get_peft_model(base_model, prompt_tuning_config).to(DTYPE)
+        trainable_params = [p for p in soft_prompt_model.parameters() if p.requires_grad][0]
+        print(f"Extracted soft prompts (before training) from peft model dtype: {trainable_params.dtype}")
+
 
         # Prepare Save Dir for the Trained Tokens
         soft_prompt_save_dir = construct_soft_prompt_save_dir_path(dataset_name, SAVE_DIR, NUM_TOKENS)
 
         # Train the Soft Prompts
         stats = train_soft_prompts(
-            model=soft_prompt_model,
+            peft_model=soft_prompt_model,
             train_dataloader=train_dataloader,
             eval_dataloader=val_dataloader,
             num_tokens=NUM_TOKENS,
