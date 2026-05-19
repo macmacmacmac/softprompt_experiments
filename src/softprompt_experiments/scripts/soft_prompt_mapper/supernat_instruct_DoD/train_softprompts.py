@@ -243,8 +243,6 @@ def run(args_list):
         # Perform a 90/10 split on the input/output pairs
         split_idx = int(len(task_df) * 0.9)
         
-        # Perform a 90/10 split on the input/output pairs
-        split_idx = int(len(task_df) * 0.9)
         if split_idx == 0 or split_idx == len(task_df):
             raise ValueError(f"Not enough dataset rows for a 90/10 split (Total Rows: {len(task_df)})")
         

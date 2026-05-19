@@ -95,7 +95,7 @@ def run(args_list=None):
         soft_prompt = data["soft_prompt"] # shape (1, soft_prompt_len, embed_dim)
         hard_prompt = data["hard_prompt"]
 
-        # Get Elicited Text using InSPEcT Technique
+        # Get Verbalization using InSPEcT Technique
         inspect_elicited_results = elicit_description_using_inspect_technique(
             model=inspect_model,
             tokenizer=tokenizer,

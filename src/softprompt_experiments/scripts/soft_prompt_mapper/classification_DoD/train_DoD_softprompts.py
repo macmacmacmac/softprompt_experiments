@@ -321,7 +321,7 @@ def run(args_list):
                 input_ids = batch["input_ids"].to(DEVICE)                                       # (batch_size, seq_len)
                 attention_mask = batch["attention_mask"].to(DEVICE)                             # (batch_size, seq_len)
                 labels = batch["labels"].to(DEVICE)                                             # (batch_size, soft_prompt_len + seq_len)
-                
+
                 # Get the text embeddings from Llama
                 with torch.no_grad():
                     text_embeds = llama_word_embeddings(input_ids).detach()

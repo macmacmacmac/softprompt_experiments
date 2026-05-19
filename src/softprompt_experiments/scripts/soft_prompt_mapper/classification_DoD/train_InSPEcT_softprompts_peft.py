@@ -8,7 +8,6 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import pandas as pd
 
-
 # ┌───────────────────────────────────────────────┐
 # │                GLOBAL VARIABLES               │
 # └───────────────────────────────────────────────┘
@@ -73,12 +72,16 @@ INSPECT_DATASET_CONFIGS = {
 # ┌───────────────────────────────────────────────┐
 # │                 HELPER METHODS                │
 # └───────────────────────────────────────────────┘
-def load_inspect_dataset(dataset_name,
-                         label_column,
-                         eval_split,
-                         classes,
-                         max_training_examples = 50_000,
-                         max_eval_examples = 2000):
+def load_inspect_dataset(
+        dataset_name,
+        label_column,
+        eval_split,
+        classes,
+        # max_training_examples = 50_000,
+        # max_eval_examples = 2000,
+        max_training_examples = 400,
+        max_eval_examples = 100,
+    ):
     
     # Load the Dataset from HF
     dataset = load_dataset(dataset_name)
@@ -351,7 +354,7 @@ def run(args_list=None):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts_peft_random_16bit")
+    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts_peft_random_500_examples")
     parser.add_argument("--num_tokens", type=int, default=20)
     args, _ = parser.parse_known_args(args_list)
 
@@ -419,7 +422,7 @@ def run(args_list=None):
         base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=DTYPE, device_map=DEVICE)
 
         # Prepare Soft Prompt Model
-        soft_prompt_model = get_peft_model(base_model, prompt_tuning_config).to(DTYPE)
+        soft_prompt_model = get_peft_model(base_model, prompt_tuning_config)#.to(DTYPE)
         trainable_params = [p for p in soft_prompt_model.parameters() if p.requires_grad][0]
         print(f"Extracted soft prompts (before training) from peft model dtype: {trainable_params.dtype}")
 
