@@ -73,22 +73,24 @@ def run(args_list=None):
 
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
+    # parser.add_argument("--model_name", type=str, default="google/gemma-2-9b-it")
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-2-7b-chat-hf")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--num_tokens", type=int, default=20)
-    parser.add_argument("--mapper_dataset_path", type=str, default="./datasets/mapper_training_dataset/supnat_eng_fil_orig")
-    parser.add_argument("--proportion_to_use", type=float, default=1.0)
+    parser.add_argument("--mapper_dataset_path", type=str, default="./datasets/mapper_training_dataset/SUPER-NATURALINSTRUCTIONS-10x-augmented")
+    parser.add_argument("--lora_save_dir", type=str, default="./mapper_lora_weights")
     parser.add_argument("--lora_rank", type=int, default=4)
     parser.add_argument("--lora_dropout", type=float, default=0.1)
     parser.add_argument("--optim_weight_decay", type=float, default=0.1) 
     args, _ = parser.parse_known_args(args_list)
 
     # Parse all the arguments into Variables
-    MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+    MODEL_NAME = args.model_name
     MAPPER_DATASET_PATH = args.mapper_dataset_path
-    DB_NAME = MAPPER_DATASET_PATH.split('/')[-1]
-    SAVE_DIR = os.path.join(MAPPER_DATASET_PATH, "mapper_lora_weights") #lora save dir
+    DATASET_NAME = MAPPER_DATASET_PATH.split('/')[-1]
+    LORA_SAVE_DIR = os.path.join(args.lora_save_dir, DATASET_NAME, MODEL_NAME)
     LR = args.lr
     EPOCHS = args.epochs
     BATCH_SIZE = args.batch_size
@@ -155,6 +157,14 @@ def run(args_list=None):
         soft_prompt_length = NUM_TOKENS
     )
 
+    # Init Training Dataloader
+    train_dataloader = DataLoader(
+        MapperDataset(train_dataset), 
+        batch_size=BATCH_SIZE, 
+        shuffle=False, 
+        collate_fn=collator
+    )
+
     # Init Validation Dataloader
     val_dataloader = DataLoader(
         MapperDataset(val_dataset), 
@@ -162,21 +172,6 @@ def run(args_list=None):
         shuffle=False, 
         collate_fn=collator
     )
-
-    # Init Training Dataloader
-    num_samples_to_use = int(len(train_dataset) * args.proportion_to_use)
-    samples_to_use = torch.randperm(len(train_dataset))[:num_samples_to_use]
-
-    print(f"Full train set size is: {len(train_dataset)}")
-
-    subset = Subset(MapperDataset(train_dataset), samples_to_use)
-    train_dataloader = DataLoader(
-        subset, 
-        batch_size = BATCH_SIZE, 
-        shuffle = True, 
-        collate_fn = collator
-    )
-    print(f"After subsetting, train size is: {len(train_dataloader.dataset)}")
 
 
     # ┌───────────────────────────────────────────────┐
@@ -357,9 +352,7 @@ def run(args_list=None):
     # ┌───────────────────────────────────────────────┐
     # │               SAVE LORA ADAPTERS              │
     # └───────────────────────────────────────────────┘
-    proportion_folder_name = f"{int(100*args.proportion_to_use)}_percent"
-    lora_weights_save_dir = os.path.join(SAVE_DIR, proportion_folder_name)
-    os.makedirs(lora_weights_save_dir, exist_ok=True)
-    model.save_pretrained(lora_weights_save_dir)
-    tokenizer.save_pretrained(lora_weights_save_dir)
-    print(f"Mapper training complete! PEFT LoRA weights saved to {lora_weights_save_dir}")
+    os.makedirs(LORA_SAVE_DIR, exist_ok=True)
+    model.save_pretrained(LORA_SAVE_DIR)
+    tokenizer.save_pretrained(LORA_SAVE_DIR)
+    print(f"Mapper training complete! PEFT LoRA weights saved to {LORA_SAVE_DIR}")

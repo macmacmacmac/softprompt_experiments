@@ -4,11 +4,11 @@ import random
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
-from src.softprompt_experiments.InSPEcT_utils import elicit_description_using_inspect_technique, ALL_LAYER_COMBINATIONS
 import pandas as pd
 import string
 from scipy.stats import pearsonr
 from tqdm import tqdm
+import json
 
 # Driver Code
 def run(args_list=None):
@@ -24,10 +24,10 @@ def run(args_list=None):
     parser.add_argument("--val_dataset_path", type=str, default="./datasets/mapper_training_dataset/DoD_3_5k/val_mapper_dataset.pt")
     parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/DoD_3_5k")
     parser.add_argument("--training_stats_path", type=str, default="./trained_soft_prompts/DoD_3_5k/accuracy_stats.csv")
+    parser.add_argument("--json_results_path", type=str, default="./DoD_3_5k_results.json")
     parser.add_argument("--sample", action='store_true', help="Use a sample of val dataset instead of the full val dataset")
     parser.add_argument("--num_samples", type=int, default=5)
     parser.add_argument("--num_tokens", type=int, default=20)
-    parser.add_argument("--inspect", action="store_true", help="Run InSPEcT technique for comparison")
     parser.add_argument("--seed", type=int, default=47)
     args, _ = parser.parse_known_args(args_list)
 
@@ -36,8 +36,8 @@ def run(args_list=None):
     VAL_DATASET_PATH = args.val_dataset_path
     LORA_DIR = args.lora_dir
     TRAINING_STATS_PATH = args.training_stats_path
+    JSON_RESULTS_PATH = args.json_results_path
     NUM_SAMPLES = args.num_samples
-    NUM_TOKENS = args.num_tokens
     SEED = args.seed
     DATASET_NAME = LORA_DIR.split('/')[-1]
 
@@ -76,14 +76,6 @@ def run(args_list=None):
     print(f"Loading base model {MODEL_NAME}...")
     base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=DTYPE, device_map=DEVICE)
 
-    # Load InSPEcT Model only when InSPEcT technique is requested
-    inspect_model = None
-    if args.inspect:
-        print(f"Loading inspect model {MODEL_NAME}...")
-        inspect_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=DTYPE, device_map=DEVICE)
-        inspect_model.eval()
-
-    
     print(f"Loading LoRA adapters from {LORA_DIR}...")
     model = PeftModel.from_pretrained(base_model, LORA_DIR)
     model.eval()
@@ -95,8 +87,8 @@ def run(args_list=None):
     print("\t\t\tGENERATION RESULTS")
     print("="*80 + "\n")
 
-    # List to hold the summary of best metrics across all inspect datasets
-    summary_results = []
+    # Lists to accumulate data for summaries
+    json_results = []
     validation_accuracies = []
     f1_scores = []
     recalls = []
@@ -166,75 +158,14 @@ def run(args_list=None):
             tqdm.write(f"Metrics         : Recall (Class Rate): {mapper_recall:.2f} | Precision: {precision:.2f} | F1: {f1_score:.2f}")
 
 
-            # Save the summary comparing Mapper vs InSPEcT Best
-            result_entry = {
+            # Accumulate results for summarization
+            json_results.append({
                 "dataset": dataset_id,
-                "mapper_class_rate": round(mapper_recall, 4),
-                "mapper_elicitation": pred_text,
-            }
-
-
-            elicitation_save_dir = f"./inspect_results/{DATASET_NAME}/DoD_soft_prompts"
-
-            if args.inspect:
-
-                tqdm.write("-" * 100)
-                tqdm.write(f"Performing InSPEcT using soft prompts trained on Dataset ID: {dataset_id}")
-                tqdm.write("-" * 100 + '\n')
-
-                # Get Elicited Text using InSPEcT Technique
-                inspect_elicited_results = elicit_description_using_inspect_technique(
-                    model=inspect_model,
-                    tokenizer=tokenizer,
-                    num_tokens=NUM_TOKENS,
-                    soft_prompt=soft_prompt,
-                    dataset_name="REPLACE_ME",
-                    layer_combinations=ALL_LAYER_COMBINATIONS,
-                    target_prompt_type='few_shot'
-                )
-
-                # Calculate Recall, Precision, F1 Score, and Class Rate
-                for j in range(len(inspect_elicited_results)):
-                    output = str(inspect_elicited_results[j]['output'])
-                    
-                    # INSPECT'S EXACT PRE-PROCESSING
-                    # Remove punctuation and lowercase the text
-                    clean_output = output.translate(str.maketrans('', '', string.punctuation)).lower()
-                    elicited_words = set(clean_output.split())
-
-                    # Calculate Recall, Precision and F1 Score
-                    overlap = target_set.intersection(elicited_words)
-                    
-                    recall = len(overlap) / len(target_set) if len(target_set) > 0 else 0
-                    precision = len(overlap) / len(elicited_words) if len(elicited_words) > 0 else 0
-                    
-                    if precision + recall > 0:
-                        f1_score = 2 * (precision * recall) / (precision + recall)
-                    else:
-                        f1_score = 0.0
-
-                    # Add the scores to the row
-                    inspect_elicited_results[j]['recall'] = recall
-                    inspect_elicited_results[j]['precision'] = precision
-                    inspect_elicited_results[j]['f1_score'] = f1_score
-
-                # Find the row with the highest class rate
-                best_classrate_row = max(inspect_elicited_results, key = lambda x: x['recall'])
-
-                # Save the summary comparing Mapper vs InSPEcT Best
-                result_entry.update({
-                    "inspect_best_class_rate": round(best_classrate_row['recall'], 4),
-                    "inspect_best_class_rate_src_layer": best_classrate_row['source_layer'],
-                    "inspect_best_class_rate_tgt_layer": best_classrate_row['target_layer'],
-                    "inspect_best_class_rate_elicitation": best_classrate_row['output']
-                })
-
-
-                # Save Elicitations using InSPEcT for this dataset
-                os.makedirs(elicitation_save_dir, exist_ok=True)
-
-                df = pd.DataFrame(inspect_elicited_results)
-                df.to_csv(f'{elicitation_save_dir}/dataset_{dataset_id}_elicitations.csv', index=False)
+                "hard_prompt": true_keywords,
+                "class_rate": round(mapper_recall, 4),
+                "f1_score": round(f1_score, 4),
+                "verbalization": pred_text,
+            })
 
             tqdm.write("-" * 80)
 
@@ -255,8 +186,7 @@ def run(args_list=None):
     print(f"Mapper Precision vs Soft Prompt Val Accuracy PCC: {precision_pcc: 2f} | p-value: {precision_p_value: 2f}")
 
 
-    if summary_results:
-        summary_df = pd.DataFrame(summary_results)
-        summary_csv_path = f"{elicitation_save_dir}/mapper_vs_inspect.csv"
-        summary_df.to_csv(summary_csv_path, index=False)
-        print(f"\nSaved master summary with best metrics to: {summary_csv_path}")
+    # Save a JSON file for summary results
+    if json_results:
+        with open(JSON_RESULTS_PATH, 'w') as f:
+            json.dump(json_results, f, indent=4)

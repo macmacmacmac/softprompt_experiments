@@ -23,7 +23,7 @@ def compile_data_list(
 
         # Unpack task_name and hard_prompt
         task_name = task_map['task_name']
-        hard_prompt = task_map['reduced_instructions']
+        hard_prompt = task_map['instruction']
 
         # If we encounter a new task name
         # Then we refresh the soft prompt tensor
@@ -91,21 +91,21 @@ def run(args_list):
     DATASET_NAME = TRAINED_SOFT_PROMPTS_DIR.split('/')[-1]
 
     # Fetch all hard prompts from Hugging Face Dataset
-    hf_dataset = load_dataset(DATASET_PATH).select_columns(['task_name', 'reduced_instructions'])
+    hf_dataset = load_dataset(DATASET_PATH).select_columns(['task_name', 'instruction'])
     
     # Convert to Pandas
     train_dataset_df = hf_dataset['train'].to_pandas()
     test_dataset_df = hf_dataset['test'].to_pandas()
 
-    # Keep only the first reduced_instruction in the reduced_instructions list
-    train_dataset_df['reduced_instructions'] = train_dataset_df.apply(
-        lambda row: list(row['reduced_instructions'])[0],
-        axis=1 # Apply row by row
-    )
-    test_dataset_df['reduced_instructions'] = test_dataset_df.apply(
-        lambda row: list(row['reduced_instructions'])[0],
-        axis=1 # Apply row by row
-    )
+    # # Keep only the first reduced_instruction in the reduced_instructions list
+    # train_dataset_df['reduced_instructions'] = train_dataset_df.apply(
+    #     lambda row: list(row['reduced_instructions'])[0],
+    #     axis=1 # Apply row by row
+    # )
+    # test_dataset_df['reduced_instructions'] = test_dataset_df.apply(
+    #     lambda row: list(row['reduced_instructions'])[0],
+    #     axis=1 # Apply row by row
+    # )
 
     # Deduplicate by 'task_name'
     train_dataset_df = train_dataset_df.drop_duplicates(subset=['task_name'])

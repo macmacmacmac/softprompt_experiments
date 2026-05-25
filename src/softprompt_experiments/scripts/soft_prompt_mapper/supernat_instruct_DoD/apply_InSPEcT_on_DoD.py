@@ -6,12 +6,14 @@ from src.softprompt_experiments.InSPEcT_utils import elicit_description_using_in
 import pandas as pd
 from tqdm import tqdm
 import evaluate
+from sentence_transformers import SentenceTransformer, util
 
 ROUGE_METRIC = evaluate.load("rouge")
+SIM_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
 
 def calculate_eval_metrics(soft_prompt_verbalization, hard_prompt):
     """
-    Calculates ROUGE-L 
+    Calculates ROUGE-L and Cosine Similarity
     """
 
     # Calculate ROUGE-L using evaluate
@@ -23,8 +25,13 @@ def calculate_eval_metrics(soft_prompt_verbalization, hard_prompt):
     
     # This directly returns the combined float score (F-measure)
     rouge_L = rouge_scores['rougeL']
+    
+    # Calculate Cosine Similarity
+    emb1 = SIM_MODEL.encode(soft_prompt_verbalization, convert_to_tensor=True)
+    emb2 = SIM_MODEL.encode(hard_prompt, convert_to_tensor=True)
+    cosine_sim = util.cos_sim(emb1, emb2).item()
             
-    return rouge_L
+    return rouge_L, cosine_sim
 
 
 def run(args_list=None):
@@ -88,8 +95,8 @@ def run(args_list=None):
     # List to hold the summary of best metrics across all datasets
     summary_results = []
 
-    # Meta List to store the rouge_L for all training examples for all src layers and all target layers
-    rouge_L_meta_list = [[[0 for _ in range(32)] for _ in range(32)] for _ in range(NUM_TRAINING_EXAMPLES)]
+    # Meta List to store the cosine_sim for all training examples for all src layers and all target layers
+    cosine_sim_meta_list = [[[0 for _ in range(32)] for _ in range(32)] for _ in range(NUM_TRAINING_EXAMPLES)]
 
     for example_idx, data in enumerate(tqdm(train_dataset[:NUM_TRAINING_EXAMPLES], desc="Performing InSPEcT on Train Soft Prompts")):
         task_name = data["task_name"]
@@ -115,14 +122,15 @@ def run(args_list=None):
             tgt_layer_idx = inspect_elicited_results[i]['target_layer'] + 1
 
             # Get all scores for the output text by InSPEcT
-            rouge_L = calculate_eval_metrics(output_text, hard_prompt)
+            rouge_L, cosine_sim = calculate_eval_metrics(output_text, hard_prompt)
             inspect_elicited_results[i]['rouge_L'] = rouge_L
+            inspect_elicited_results[i]['cosine_sim'] = cosine_sim
 
-            # Update the meta list with the rouge_L value
-            rouge_L_meta_list[example_idx][src_layer_idx][tgt_layer_idx] = rouge_L
+            # Update the meta list with the cosine_sim value
+            cosine_sim_meta_list[example_idx][src_layer_idx][tgt_layer_idx] = cosine_sim
 
-        # Find the row with the highest rouge_L score
-        max_rouge_L_row = max(inspect_elicited_results, key=lambda x: x['rouge_L'])
+        # Find the row with the highest cosine_sim score
+        max_metric_row = max(inspect_elicited_results, key=lambda x: x['cosine_sim'])
 
         # Retrieve the training stats for this dataset
         training_stats_df = TRAINING_STATS_DF[TRAINING_STATS_DF["task_name"] == task_name]
@@ -135,9 +143,10 @@ def run(args_list=None):
         result_entry = {
             "task_name": task_name,
             "val_rougeL": training_stats_df['val_rougeL'].iloc[0] if len(training_stats_df) > 0 else None,
-            "max_rouge_L": round(max_rouge_L_row['rouge_L'], 4),
-            "max_rouge_L_src_layer": max_rouge_L_row['source_layer'],
-            "max_rouge_L_tgt_layer": max_rouge_L_row['target_layer'],
+            "max_rouge_L": round(max_metric_row['rouge_L'], 4),
+            "max_cosine_sim": round(max_metric_row['cosine_sim'], 4),
+            "max_metric_src_layer": max_metric_row['source_layer'],
+            "max_metric_tgt_layer": max_metric_row['target_layer'],
         }
 
         summary_results.append(result_entry)
@@ -151,10 +160,10 @@ def run(args_list=None):
     # ┌───────────────────────────────────────────────┐
     # │          CALCULATE THE BEST LAYER PAIR        │
     # └───────────────────────────────────────────────┘
-    rouge_L_tensor = torch.tensor(rouge_L_meta_list)
+    metric_tensor = torch.tensor(cosine_sim_meta_list)
 
     # Average the scores across all examples (dim 0)
-    mean_scores = torch.mean(rouge_L_tensor.float(), dim=0)
+    mean_scores = torch.mean(metric_tensor.float(), dim=0)
 
     # print("Mean scores for layers 13-17 (src x tgt):")
     # print(mean_scores[13:18, 13:18])
@@ -199,11 +208,12 @@ def run(args_list=None):
             output_text = str(inspect_elicited_results[i]['output'])
 
             # Get all scores for the output text by InSPEcT
-            rouge_L = calculate_eval_metrics(output_text, hard_prompt)
+            rouge_L, cosine_sim = calculate_eval_metrics(output_text, hard_prompt)
             inspect_elicited_results[i]['rouge_L'] = rouge_L
+            inspect_elicited_results[i]['cosine_sim'] = cosine_sim
 
-        # Find the row with the highest rouge_L
-        max_rouge_L_row = max(inspect_elicited_results, key=lambda x: x['rouge_L'])
+        # Find the row with the highest cosine_sim
+        max_metric_row = max(inspect_elicited_results, key=lambda x: x['cosine_sim'])
 
         # Save Elicitations using for this dataset
         os.makedirs(f"{RESULTS_SAVE_DIR}/test", exist_ok=True)
@@ -212,18 +222,35 @@ def run(args_list=None):
 
         result_entry = {
             "task_name": task_name,
-            "max_rouge_L": round(max_rouge_L_row['rouge_L'], 4),
-            "max_rouge_L_src_layer": max_rouge_L_row['source_layer'],
-            "max_rouge_L_tgt_layer": max_rouge_L_row['target_layer'],
+            "hard_prompt": hard_prompt,
+            "verbalization": max_metric_row['output'],
+            "max_rouge_L": round(max_metric_row['rouge_L'], 4),
+            "max_cosine_sim": round(max_metric_row['cosine_sim'], 4),
+            "max_metric_src_layer": max_metric_row['source_layer'],
+            "max_metric_tgt_layer": max_metric_row['target_layer'],
         }
 
         summary_results.append(result_entry)
 
     if summary_results:
+
+        # Save a CSV
         summary_df = pd.DataFrame(summary_results)
         summary_csv_path = f"{RESULTS_SAVE_DIR}/inspect_val_summary.csv"
         summary_df.to_csv(summary_csv_path, index=False)
         print(f"\nSaved master summary with best metrics to: {summary_csv_path}")
+        
+        # Save a JSON
+        summary_json_path = f"{RESULTS_SAVE_DIR}/inspect_val_summary.json"
+        summary_df.to_json(summary_json_path, orient="records", indent=4)
+        print(f"Saved master summary JSON to: {summary_json_path}")
+
+        # Report Averages
+        avg_rouge_l = summary_df['max_rouge_L'].mean()
+        avg_cosine_sim = summary_df['max_cosine_sim'].mean()
+        print(f"\nTest Set Averages:")
+        print(f"Average ROUGE-L: {avg_rouge_l:.4f}")
+        print(f"Average Cosine Similarity: {avg_cosine_sim:.4f}")
 
 
 
