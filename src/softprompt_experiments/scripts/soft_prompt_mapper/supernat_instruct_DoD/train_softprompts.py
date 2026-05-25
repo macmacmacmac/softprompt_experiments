@@ -1,118 +1,50 @@
 import os
 import argparse
-import sqlite3
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from softprompt_experiments.models.softprompt import SoftPrompt
 from tqdm import tqdm
 import pandas as pd
-from datasets import load_dataset
-
-# Inspect Dataset specific configs
-INSPECT_DATASET_CONFIGS = {
-    "stanfordnlp/sst2": {
-        "epochs": 8,
-        "lr": 8e-4,
-        "batch_size": 8,
-        "eval_split": "validation",
-        "text_column": "sentence",
-        "label_column": "label",
-        "classes": ["negative", "positive"]
-    },
-    "SetFit/sst5": {
-        "epochs": 12,
-        "lr": 6e-3,
-        "batch_size": 8,
-        "eval_split": "validation",
-        "text_column": "text",
-        "label_column": "label",
-        "classes": ["terrible", "bad", "neutral", "good", "great"]
-    },
-    "fancyzhx/ag_news": {
-        "epochs": 8,
-        "lr": 8e-3,
-        "batch_size": 8,
-        "eval_split": "test",
-        "text_column": "text",
-        "label_column": "label",
-        "classes": ["world", "sports", "business", "technology"]
-    },
-    "SetFit/subj": {
-        "epochs": 8,
-        "lr": 8e-3,
-        "batch_size": 8,
-        "eval_split": "test",
-        "text_column": "text",
-        "label_column": "label",
-        "classes": ["objective", "subjective"]
-    },
-    "SetFit/TREC-QC": {
-        "epochs": 20,
-        "lr": 8e-4,
-        "batch_size": 8,
-        "eval_split": "test",
-        "text_column": "text",
-        "label_column": "label_coarse",
-        "classes": ["description", "entity", "abbreviation", "human", "number", "location"]
-    }
-}
+from datasets import load_dataset, concatenate_datasets
+import evaluate
 
 
-class InSPEcTClassificationDataset(Dataset):
-    def __init__(self, dataset_id, text_column, label_column, dataset_classes, split="train", max_examples = 50_000):
+class TaskDataset(Dataset):
+    def __init__(self, data_rows):
         """
-        Fetches all sentences and their target keywords for a specific dataset_id from HuggingFace.
+        Fetches all sentences and their targets for a specific task.
         """
-        # Init Member Variables
-        self.dataset_id = dataset_id
-        self.split = split
         self.inputs = []
         self.targets = []
-
-        # Load the Dataset from HF
-        dataset = load_dataset(dataset_id)
-
-        # Limit Data (if applicable)
-        dataset[split] = dataset[split].select(range(max_examples)) \
-            if len(dataset[split]) > max_examples else dataset[split]
         
-        # Create a new column for input_text
-        dataset[split] = dataset[split].map(
-            lambda batch: {"input_text": [f"Sentence: {text} Label:" for text in batch[text_column]]},
-            batched = True,
-            num_proc = 1
-        )
+        for row in data_rows:
+            # Format the input text so the LLM knows what to do
+            # (The soft prompt will be prepended to this later)
+            input_text = f"Input: {row['input']}\nOutput:"
 
-        # Create a new column for target_text
-        dataset[split] = dataset[split].map(
-            lambda batch: {"target_text": [f" {dataset_classes[label]}" for label in batch[label_column]]},
-            batched = True,
-            num_proc = 1
-        )
-
-        # Fetch the inputs and targets inputs
-        self.inputs = list(dataset[split]["input_text"])
-        self.targets = list(dataset[split]["target_text"])
-    
+            # Format the target text
+            target_text = f" {row['output']}"
+            
+            self.inputs.append(input_text)
+            self.targets.append(target_text)
+        
         if len(self.inputs) == 0:
-            raise ValueError(f"No data found for dataset_id {self.dataset_id} (split: {self.split})")
-
+            raise ValueError("No data found for task")
 
     def __len__(self):
         return len(self.inputs)
 
-
     def __getitem__(self, idx):
-        # Return the raw strings which we will tokenize later
+        # Return the raw strings, tokenized later by collator
         return self.inputs[idx], self.targets[idx]
     
 
-
 class CausalLMBatchCollator:
-    def __init__(self, tokenizer, soft_prompt_length=20):
+    def __init__(self, tokenizer, soft_prompt_length=20, max_length=512):
         self.tokenizer = tokenizer
         self.soft_prompt_length = soft_prompt_length
+        self.max_length = max_length
 
     def __call__(self, batch):
         inputs, targets = zip(*batch)
@@ -125,47 +57,65 @@ class CausalLMBatchCollator:
             full_texts, 
             padding=True, 
             truncation=True,
-            max_length=64, 
+            max_length=self.max_length, 
             return_tensors="pt",
             add_special_tokens=True
         )
         
-        input_ids = tokenized["input_ids"]                                                                  # (batch_size, seq_len)
-        attention_mask = tokenized["attention_mask"]
+        input_ids = tokenized["input_ids"]                              # (batch_size, seq_len)
+        attention_mask = tokenized["attention_mask"]                    # (batch_size,)
         
-        # Create the labels tensor (start by copying input_ids)
-        labels = input_ids.clone()                                                                          # (batch_size, seq_len)
+        # Create the labels tensor
+        labels = input_ids.clone()                                      # (batch_size, seq_len)
         
         # Mask out the input text and the padding tokens with -100
         for i, (inp, tgt) in enumerate(zip(inputs, targets)):
 
             # Tokenize just the input text to find out how long it is
-            inp_len = len(self.tokenizer(inp, add_special_tokens=True)["input_ids"])
-            
+            inp_len = len(self.tokenizer.encode(inp, add_special_tokens=True))
+
             # Mask the input portion so loss is not calculated on it
             labels[i, :inp_len] = -100
-            
+
             # Mask any padding tokens added to the end of the sequence
             labels[i, attention_mask[i] == 0] = -100
 
-        # Account for the Soft Prompt!
+        # Account for Soft Prompt in labels
         # Because we will prepend `soft_prompt_length` virtual embeddings to the front
         # of the inputs in the training loop, we must pad the front of our labels with -100s
         # so the matrix dimensions line up perfectly for the loss function.
         batch_size = labels.size(0)
-        soft_prompt_labels = torch.full((batch_size, self.soft_prompt_length), -100, dtype=torch.long)      # (batch_size, soft_prompt_len)
-        labels = torch.cat([soft_prompt_labels, labels], dim=1)                                             # (batch_size, soft_prompt_len + seq_len)
+        soft_prompt_labels = torch.full((batch_size, self.soft_prompt_length), -100, dtype=torch.long)  # (batch_size, soft_prompt_len)
+        labels = torch.cat([soft_prompt_labels, labels], dim=1)                                         # (batch_size, soft_prompt_len + seq_len)
+        
+        # Because SUPER-NATURALINSTRUCTIONS DoD requires open ended generation, we need to 
+        # also prep just the input sequence for doing evaluations after training
+        input_tokenized = self.tokenizer(
+            list(inputs),
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+            add_special_tokens=True
+        )
 
         return {
+
+            # Full Sequence related data
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "labels": labels
-        }
+            "labels": labels,
 
+            # Input only related data
+            "input_only_ids": input_tokenized["input_ids"],
+            "input_only_attention_mask": input_tokenized["attention_mask"],
+            "targets": list(targets)
+        }
 
 
 # Driver Code
 def run(args_list):
+        
     exp_name = os.path.basename(__file__)
     print(
         "="*100, "\n", 
@@ -180,35 +130,44 @@ def run(args_list):
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--min_delta", type=float, default=0.001)
     parser.add_argument("--num_tokens", type=int, default=20)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--save_dir", type=str, default="./inspect_soft_prompts")
-    parser.add_argument("--use_custom_train_configs", action="store_true", help="Use Dataset specific training configs")
+    parser.add_argument("--max_length", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--dataset_path", type=str, default="Suryanshg/SUPER-NATURALINSTRUCTIONS-english-filtered")
+    parser.add_argument("--save_dir", type=str, default="./trained_soft_prompts/SUPER-NATURALINSTRUCTIONS-DoD-test-retrained")
+    parser.add_argument("--num_examples", type=int, default=500, help = "num of examples to use per task for training and eval of soft prompts")
     parser.add_argument("--seed", type=int, default=47)
+    parser.add_argument("--train_only_test", action="store_true", help="Consider training only test soft prompts")
+    parser.add_argument("--resume", action="store_true", help="Resume training from existing soft prompts")
+    parser.add_argument("--resume_dir", type=str, default="./trained_soft_prompts/SUPER-NATURALINSTRUCTIONS-english-filtered", help="Directory containing existing soft prompts to load from")
     args, _ = parser.parse_known_args(args_list)
-    
 
     # Parse all the arguments into Variables
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-    DEFAULT_LR = args.lr
-    DEFAULT_EPOCHS = args.epochs
+    DATASET_PATH = args.dataset_path
+    LR = args.lr
+    EPOCHS = args.epochs
     NUM_TOKENS = args.num_tokens
-    DEFAULT_BATCH_SIZE = args.batch_size
+    MAX_LENGTH = args.max_length
+    BATCH_SIZE = args.batch_size
     SAVE_DIR = args.save_dir
     PATIENCE = args.patience
     MIN_DELTA = args.min_delta
-    USE_CUSTOM_TRAIN_CONFIGS = args.use_custom_train_configs
+    NUM_EXAMPLES = args.num_examples
+    SEED = args.seed
+    RESUME = args.resume
+    RESUME_DIR = args.resume_dir
+    TRAIN_ONLY_TEST = args.train_only_test
 
+    # Create Directory to save all soft prompts for this Dataset
+    os.makedirs(SAVE_DIR, exist_ok=True)
 
     # Determine DEVICE and DTYPE
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    # DEVICE = "cpu"
     DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
 
     # Load Tokenizer
     llama_tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-    # Llama doesn't have a default pad token, so we map it to EOS
-    llama_tokenizer.pad_token = llama_tokenizer.eos_token
+    llama_tokenizer.pad_token = llama_tokenizer.eos_token # Llama doesn't have a default pad token, so we map it to EOS
 
     # Load Llama Model and set it in eval mode
     llama_model = AutoModelForCausalLM.from_pretrained(
@@ -218,138 +177,153 @@ def run(args_list):
     )
     llama_model.eval()
 
-    # Freeze the entire Llama model since we only want to train the Soft prompt
+    # Freeze the entire Llama model since we only want to train Soft Prompts
     for param in llama_model.parameters():
         param.requires_grad = False
 
     # Get the Llama Model's Word Embedding Mappings
     llama_word_embeddings = llama_model.get_input_embeddings()
 
-    # Init Collator
-    collator = CausalLMBatchCollator(
-        tokenizer = llama_tokenizer,
-        soft_prompt_length = NUM_TOKENS
-    )
+    # Load HF Dataset
+    print(f"Loading dataset from {DATASET_PATH}...")
+    hf_ds = load_dataset(DATASET_PATH)
 
-    # Determine file path for accuracy stats
-    ACCURACY_STATS_FILE_PATH = f"{SAVE_DIR}/accuracy_stats.csv"
 
-    # Preload existing accuracy_stats, if it exists already
-    if os.path.isfile(ACCURACY_STATS_FILE_PATH):
-        df = pd.read_csv(ACCURACY_STATS_FILE_PATH)
+    if TRAIN_ONLY_TEST:
+        # Use only the test split
+        full_ds = hf_ds["test"]
+
+    else:
+        # Combine splits to get all tasks and their respective instances across the dataset
+        splits_to_concat = [hf_ds[split] for split in hf_ds.keys()]
+        full_ds = concatenate_datasets(splits_to_concat)
+    
+    # Convert to pandas for grouping instances by task efficiently without .filter() iteration
+    full_df = full_ds.to_pandas()
+    grouped_tasks = full_df.groupby('task_name')
+
+    # Get all unique tasks
+    unique_tasks = list(grouped_tasks.groups.keys())
+    print(f"Found {len(unique_tasks)} unique training tasks to process.")
+    
+    # Init Dataset Progress Bar
+    dataset_pbar = tqdm(unique_tasks, desc="Master Task Progress")
+
+    # Init file path for training stats
+    TRAINING_STATS_FILE_PATH = f"{SAVE_DIR}/training_stats.csv"
+
+    # Preload existing training_stats, if it exists already
+    if os.path.isfile(TRAINING_STATS_FILE_PATH):
+        df = pd.read_csv(TRAINING_STATS_FILE_PATH)
         training_stats = df.to_dict(orient='list')
-
     else:
         # Init a dict to save training stats
         training_stats = {
-            'dataset_id': [],
-            'train_accuracy': [],
-            'val_accuracy': [],
+            'task_name': [],
+            'val_rougeL': [],
             'avg_train_loss': [],
             'avg_val_loss': []
         }
+        
+    # Init ROUGE metric
+    rouge_metric = evaluate.load('rouge')
 
+    # Loop over all tasks
+    for task_name in dataset_pbar:
+        save_dir = f"{SAVE_DIR}/{task_name}"
 
-    # Loop over all dataset ids
-    for dataset_id in INSPECT_DATASET_CONFIGS:
-
-        # Init save dir
-        dataset_name = dataset_id.split('/')[1]
-        save_dir = f"{SAVE_DIR}/{dataset_name}_{NUM_TOKENS}tokens"
-
-        # Retrieve the configs for current dataset_id
-        configs = INSPECT_DATASET_CONFIGS[dataset_id]
-
-        # Training Configs
-        epochs = configs["epochs"] if USE_CUSTOM_TRAIN_CONFIGS else DEFAULT_EPOCHS
-        lr = configs["lr"] if USE_CUSTOM_TRAIN_CONFIGS else DEFAULT_LR
-        batch_size = configs["batch_size"] if USE_CUSTOM_TRAIN_CONFIGS else DEFAULT_BATCH_SIZE
-
-        # General Configs
-        eval_split = configs["eval_split"]
-        text_column = configs["text_column"]
-        label_column = configs["label_column"]
-        classes = configs["classes"]
+        # If there exists an already trained soft prompt for this dataset id, then skip this
+        if os.path.exists(save_dir) and os.path.exists(os.path.join(save_dir, "softprompt.pt")):
+            tqdm.write(f"Skipping training for task: {task_name}")
+            continue
+        
+        # Update the outer progress bar so you know exactly which dataset is training
+        dataset_pbar.set_postfix({"Current Task": task_name})
 
         # ┌───────────────────────────────────────────────┐
         # │                  DATASET PREP                 │
         # └───────────────────────────────────────────────┘
 
-        # Init Training Dataset
-        train_dataset = InSPEcTClassificationDataset(
-            dataset_id = dataset_id,
-            text_column = text_column,
-            label_column = label_column,
-            dataset_classes= classes,
-            split = "train"
+        # Fetch all rows for this task across the entire dataset
+        task_df = grouped_tasks.get_group(task_name)
+
+        # Cap the task size if it exceeds our num_examples threshold
+        if len(task_df) > NUM_EXAMPLES:
+            # randomly sample from the task dataframe
+            task_df = task_df.sample(n=NUM_EXAMPLES, random_state=SEED)
+        
+        # Perform a 90/10 split on the input/output pairs
+        split_idx = int(len(task_df) * 0.9)
+        
+        if split_idx == 0 or split_idx == len(task_df):
+            raise ValueError(f"Not enough dataset rows for a 90/10 split (Total Rows: {len(task_df)})")
+        
+        # Extract rows for training and testing split
+        train_rows = task_df.iloc[:split_idx].to_dict('records')
+        val_rows = task_df.iloc[split_idx:].to_dict('records')
+        
+        # Use train/val rows to create datasets
+        train_dataset = TaskDataset(train_rows)
+        val_dataset = TaskDataset(val_rows)
+
+        # Get task-specific max length dynamically from the dataframe (fallback to MAX_LENGTH if missing)
+        task_max_length = int(task_df['total_tokens'].max()) if 'total_tokens' in task_df.columns else MAX_LENGTH
+
+        # Init Collator
+        collator = CausalLMBatchCollator(
+            tokenizer=llama_tokenizer,
+            soft_prompt_length=NUM_TOKENS,
+            max_length=task_max_length
         )
 
-        # Init Training DataLoader 
-        train_dataloader = DataLoader(
-            train_dataset,
-            batch_size = batch_size,
-            shuffle = True,
-            collate_fn = collator
-        )
-
-        # Init Validation Dataset
-        val_dataset = InSPEcTClassificationDataset(
-            dataset_id = dataset_id,
-            text_column = text_column,
-            label_column = label_column,
-            dataset_classes= classes,
-            split = eval_split
-        )
-
-        # Init Validation DataLoader 
-        val_dataloader = DataLoader(
-            val_dataset,
-            batch_size = batch_size,
-            shuffle = False,
-            collate_fn = collator
-        )
-
-        print(f"Successfully loaded dataset {dataset_name}!")
+        # Init train/val dataloaders
+        train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collator)
+        val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collator)
 
         # ┌───────────────────────────────────────────────┐
         # │               SOFT PROMPT INIT                │
         # └───────────────────────────────────────────────┘
 
+        # Init Soft Prompt
         soft_prompt = SoftPrompt(
-            model = llama_model,
-            tokenizer = llama_tokenizer,
-            word_embeddings = llama_word_embeddings,
-            num_tokens = NUM_TOKENS
+            model=llama_model,
+            tokenizer=llama_tokenizer,
+            word_embeddings=llama_word_embeddings,
+            num_tokens=NUM_TOKENS
         ).to(DEVICE)
 
+        if RESUME and RESUME_DIR:
+            old_softprompt_path = os.path.join(RESUME_DIR, task_name)
+            if os.path.exists(os.path.join(old_softprompt_path, "softprompt.pt")):
+                tqdm.write(f"Resuming training for {task_name}, loading soft prompt from {old_softprompt_path}")
+                soft_prompt.load_softprompt(os.path.join(old_softprompt_path, "softprompt.pt"))
+            else:
+                tqdm.write(f"No existing soft prompt found at {old_softprompt_path}, initializing from scratch for {task_name}.")
+
         # Init Optimizer with only params from Soft Prompt
-        optimizer = torch.optim.AdamW(soft_prompt.parameters(), lr = lr)
+        optimizer = torch.optim.AdamW(soft_prompt.parameters(), lr=LR)
 
         # ┌───────────────────────────────────────────────┐
         # │                 TRAINING LOOP                 │
         # └───────────────────────────────────────────────┘
-        tqdm.write(f"\n--- Starting training for Dataset {dataset_id} ---")
+        tqdm.write(f"\n--- Starting training for Task {task_name}, Max Tokens {task_max_length} ---")
 
         # Early Stopping Variables
         epochs_no_improve = 0
         best_soft_prompt_state = None
         best_val_loss = float('inf')
-        best_val_accuracy = 0
+        best_val_rougeL = 0.0
         best_train_loss = float('inf')
-        best_train_accuracy = 0
 
-        # Loop EPOCHS times (or unitl Early Stopping triggers)
-        for epoch in range(epochs):
+        # Loop EPOCHS times (or until Early Stopping triggers)
+        for epoch in range(EPOCHS):
             total_train_loss = 0
-            train_correct_tokens = 0
-            train_total_tokens = 0
 
             # Set the soft prompt in training mode
             soft_prompt.train()
             
-            for batch in tqdm(train_dataloader, desc=f"Epoch {epoch + 1}/{epochs} [Train]"):
-
-                # Reset gradients
+            for step, batch in enumerate(train_dataloader):
+                # Reset the gradients
                 optimizer.zero_grad()
                 
                 # Move inputs to DEVICE
@@ -360,7 +334,7 @@ def run(args_list):
                 # Get the text embeddings from Llama
                 with torch.no_grad():
                     text_embeds = llama_word_embeddings(input_ids).detach()
-                    
+
                 # Get the continuous Soft Prompt embeddings and duplicate for the batch
                 soft_prompt_embeds = soft_prompt()                                              # (1, soft_prompt_len, embed_dim)
                 soft_prompt_embeds = soft_prompt_embeds.expand(text_embeds.shape[0], -1, -1)    # (batch_size, soft_prompt_len, embed_dim)
@@ -381,61 +355,52 @@ def run(args_list):
                 
                 # Extract the loss
                 loss = outputs.loss
-                
-                # Backpropagate loss and update the parameters
+
+                # Backpropagate and update weights
                 loss.backward()
                 optimizer.step()
 
-                logits = outputs.logits
-
-                # Shift logits and labels so token i predicts i + 1
-                shifted_logits = logits[..., :-1, :].contiguous()
-                shifted_labels = labels[..., 1:].contiguous()
-
-                # Get the predicted token ids
-                preds = torch.argmax(shifted_logits, dim = -1)
-
-                # Create a mask to ignore the -100 padding tokens
-                valid_mask = (shifted_labels != -100)
-
-                # Count correct predictions
-                correct = (preds == shifted_labels) & valid_mask
-
-                # Accumulate numbers for Accuracy and Avg Loss calculation per Epoch
-                train_correct_tokens += correct.sum().item()
-                train_total_tokens += valid_mask.sum().item()        
                 total_train_loss += loss.item()
+
+                # Free up memory explicitly
+                del outputs, loss, inputs_embeds, text_embeds, soft_prompt_embeds, soft_prompt_mask, full_attention_mask
+                torch.cuda.empty_cache()
                 
             avg_train_loss = total_train_loss / len(train_dataloader)
-            train_accuracy = (train_correct_tokens / train_total_tokens) * 100 if train_total_tokens > 0 else 0
 
             # Set soft_prompt in eval mode
             soft_prompt.eval()
             total_val_loss = 0
-            val_correct_tokens = 0
-            val_total_tokens = 0
+            
+            val_preds = []
+            val_targets = []
 
             # Freeze all weights
             with torch.no_grad():
-                for batch in tqdm(val_dataloader, desc=f"Epoch {epoch + 1}/{epochs} [Val]"):
+                for batch in val_dataloader:
 
                     # Move inputs to DEVICE
                     input_ids = batch["input_ids"].to(DEVICE)                                       # (batch_size, seq_len)
                     attention_mask = batch["attention_mask"].to(DEVICE)                             # (batch_size, seq_len)
                     labels = batch["labels"].to(DEVICE)                                             # (batch_size, soft_prompt_len + seq_len)
+                    input_only_ids = batch["input_only_ids"].to(DEVICE)
+                    input_only_attention_mask = batch["input_only_attention_mask"].to(DEVICE)
 
                     # Get the text embeddings from Llama
                     text_embeds = llama_word_embeddings(input_ids).detach()
+                    input_only_text_embeds = llama_word_embeddings(input_only_ids).detach()
                     
                     # Get the continuous Soft Prompt embeddings and duplicate for the batch
                     soft_prompt_embeds = soft_prompt().expand(text_embeds.shape[0], -1, -1)         # (batch_size, soft_prompt_len, embed_dim)
                     
                     # Concatenate Embeddings: [Soft Prompt + Input Text]
                     inputs_embeds = torch.cat([soft_prompt_embeds, text_embeds], dim=1)             # (batch_size, soft_prompt_len + seq_len, embed_dim)
+                    input_only_inputs_embeds = torch.cat([soft_prompt_embeds, input_only_text_embeds], dim=1)
                     
                     # Concatenate Attention Masks: Add `1`s so Llama pays attention to the soft prompt
                     soft_prompt_mask = torch.ones((attention_mask.shape[0], NUM_TOKENS), dtype=attention_mask.dtype, device=DEVICE)     # (batch_size, soft_prompt_len)
                     full_attention_mask = torch.cat([soft_prompt_mask, attention_mask], dim=1)      # (batch_size, soft_prompt_len + seq_len)
+                    input_only_full_attention_mask = torch.cat([soft_prompt_mask, input_only_attention_mask], dim=1)
 
                     # Forward Pass
                     outputs = llama_model(
@@ -446,42 +411,43 @@ def run(args_list):
 
                     # Accumulate validation loss
                     total_val_loss += outputs.loss.item()
+                    
+                    # Generate Outputs for RougeL
+                    generated_ids = llama_model.generate(
+                        inputs_embeds=input_only_inputs_embeds,
+                        attention_mask=input_only_full_attention_mask,
+                        max_new_tokens=task_max_length,
+                        pad_token_id=llama_tokenizer.eos_token_id,
+                        eos_token_id=llama_tokenizer.eos_token_id
+                    )
+                    
+                    decoded_preds = llama_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+                    val_preds.extend(decoded_preds)
+                    val_targets.extend(batch["targets"])
 
-                    # Calculate Validation Accuracy
-                    logits = outputs.logits
-                    shifted_logits = logits[..., :-1, :].contiguous()
-                    shifted_labels = labels[..., 1:].contiguous()
-
-                    # Get the predicted token ids
-                    preds = torch.argmax(shifted_logits, dim = -1)
-
-                    # Create a mask to ignore the -100 padding tokens
-                    valid_mask = (shifted_labels != -100)
-
-                    # Count correct predictions
-                    correct = (preds == shifted_labels) & valid_mask
-
-                    # Accumulate numbers for Accuracy and Avg Loss calculation
-                    val_correct_tokens += correct.sum().item()
-                    val_total_tokens += valid_mask.sum().item()
+                    # Free up memory explicitly
+                    del outputs, inputs_embeds, text_embeds, soft_prompt_embeds, soft_prompt_mask, full_attention_mask
+                    del input_only_inputs_embeds, input_only_text_embeds, input_only_full_attention_mask, generated_ids, input_ids, attention_mask, labels, input_only_ids, input_only_attention_mask
+                    torch.cuda.empty_cache()
             
             avg_val_loss = total_val_loss / len(val_dataloader)
-            val_accuracy = (val_correct_tokens / val_total_tokens) * 100 if val_total_tokens > 0 else 0
+            
+            # compute rougeL
+            rouge_result = rouge_metric.compute(predictions=val_preds, references=val_targets)
+            val_rougeL = rouge_result['rougeL']
 
             tqdm.write(f"\nEpoch {epoch + 1} Summary:")
-            tqdm.write(f"Train -> Loss: {avg_train_loss: .4f} | Accuracy: {train_accuracy: .2f}%")
-            tqdm.write(f"Val   -> Loss: {avg_val_loss: .4f} | Accuracy: {val_accuracy: .2f}%")
+            tqdm.write(f"Train -> Loss: {avg_train_loss: .4f}")
+            tqdm.write(f"Val   -> Loss: {avg_val_loss: .4f} | RougeL: {val_rougeL: .4f}")
 
-            # TODO: Improve the logic here by stopping early when testing accuracy reaches 90%
             # ┌───────────────────────────────────────────────┐
             # │               EARLY STOPPING LOGIC            │
             # └───────────────────────────────────────────────┘
             # Check if the current validation loss is better than our best so far
             if avg_val_loss < (best_val_loss - MIN_DELTA):
                 best_val_loss = avg_val_loss
-                best_val_accuracy = val_accuracy
+                best_val_rougeL = val_rougeL
                 best_train_loss = avg_train_loss
-                best_train_accuracy = train_accuracy
                 epochs_no_improve = 0
                 
                 # Save a copy of the best weights in memory
@@ -508,28 +474,24 @@ def run(args_list):
         soft_prompt.save_softprompt(save_dir)
         tqdm.write(f"\nTraining complete! Soft prompt saved to {save_dir}/softprompt.pt")
 
-
         # ┌───────────────────────────────────────────────┐
         # │            WRITE TRAINING STATS               │
         # └───────────────────────────────────────────────┘
-        # Check if current dataset id exists:
-        if dataset_id in training_stats['dataset_id']:
-            idx = training_stats['dataset_id'].index(dataset_id)
-            training_stats['train_accuracy'][idx] = round(best_train_accuracy, 4)
-            training_stats['val_accuracy'][idx] = round(best_val_accuracy, 4)
+        # Check if current task_name exists:
+        if task_name in training_stats['task_name']:
+            idx = training_stats['task_name'].index(task_name)
+            training_stats['val_rougeL'][idx] = round(best_val_rougeL, 4)
             training_stats['avg_train_loss'][idx] = round(best_train_loss, 4)
             training_stats['avg_val_loss'][idx] = round(best_val_loss, 4)
         else:
-            training_stats['dataset_id'].append(dataset_id)
-            training_stats['train_accuracy'].append(round(best_train_accuracy, 4))
-            training_stats['val_accuracy'].append(round(best_val_accuracy, 4))
+            training_stats['task_name'].append(task_name)
+            training_stats['val_rougeL'].append(round(best_val_rougeL, 4))
             training_stats['avg_train_loss'].append(round(best_train_loss, 4))
             training_stats['avg_val_loss'].append(round(best_val_loss, 4))
 
         # Save the CSV file with training stats
         df = pd.DataFrame(training_stats)
-        df.to_csv(ACCURACY_STATS_FILE_PATH, index=False)
-
+        df.to_csv(TRAINING_STATS_FILE_PATH, index=False)
 
         # Free up some allocations
         del soft_prompt

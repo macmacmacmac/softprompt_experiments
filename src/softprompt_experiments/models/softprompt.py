@@ -1,23 +1,30 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from torch.optim import AdamW, Adam
-import random
 import os
 import copy
 import math
+
+
 class SoftPrompt(nn.Module):
     """
     An implementation of softprompt for prompt-tuning, subclasses nn.Module
     - model: a huggingface decoder model
-    - init: either 'phrase' or 'random.' Former initializes from a passed in phrase
+    - init_randomly: decide whether to initialize soft prompt embedding randomly using N(0, 1) or from tokens from the model's vocab
+    - init_text: either 'phrase' or 'random.' Former initializes from a passed in phrase
     - word_embeddings: it's word_embedding matrix from model.get_input_embeddings
     - tokenizer: the tokenizer to be used
     - path_to_model: if passed, loads a saved softprompt model instead of initializing one
     - num_tokens: number of virtual tokens in the softprompt
     """
-    def __init__(self, model=None, init=None, tokenizer=None, word_embeddings=None, path_to_model=None, num_tokens=8):
+    def __init__(self, 
+                 model=None, 
+                 init_randomly = False,
+                 init_text=None, 
+                 tokenizer=None, 
+                 word_embeddings=None, 
+                 path_to_model=None, 
+                 num_tokens=8):
         super().__init__()
 
         # Register tokenizer, model and word_embedddings matrix as class instance variables without being
@@ -36,58 +43,72 @@ class SoftPrompt(nn.Module):
         # If the Soft Prompt does not need to be initialized with Pre-Trained weights
         if path_to_model is None:
 
-            # Get the Vocabulary Size
-            vocab_size = word_embeddings.num_embeddings
+            # Init Soft Prompt embeddings randomly from N(0, 1)
+            if init_randomly:
 
-            # If init text is provided
-            if init is not None:
+                self.prompt_embeddings = nn.Parameter(
+                    torch.randn(
+                        self.num_tokens, 
+                        word_embeddings.embedding_dim, 
+                        dtype=model.dtype, 
+                        device=model.device
+                    )
+                )
 
-                # Tokenize init without special tokens
-                init_text = init
-                init_token_ids = tokenizer(init_text, add_special_tokens=False)["input_ids"]
-
-                # Calculate the total num of text tokens
-                num_text_tokens = len(init_token_ids)
-
-                # If num of text tokens greater than num of soft prompt tokens
-                if num_text_tokens > num_tokens:
-
-                    # Then trim the text tokens to the size of num of soft prompt tokens
-                    init_token_ids = init_token_ids[:num_tokens]
-
-                # If num of text tokens is less than num of soft prompt tokens
-                elif num_text_tokens < num_tokens:
-
-                    # Find number of times to repeat the token ids
-                    num_reps = math.ceil(num_tokens / num_text_tokens)
-
-                    # Repeat the token ids until its equivalent to the number of soft prompt tokens
-                    init_token_ids = init_token_ids * num_reps
-
-                # Perform the trimming again just to be certain that the token ids do not exceed num of soft prompt tokens
-                init_token_ids = init_token_ids[:num_tokens]
-
-                # Convert the token ids to a Long Tensor
-                # and move to the same device as word embedding matrix
-                init_token_ids = torch.LongTensor(init_token_ids).to(word_embeddings.weight.device)
-            
-            # If Random Init is requested
+            # Init Soft Prompt embeddings using tokens from the vocab depending on init_text parameter
             else:
 
-                # Randomly sample "num_tokens" token_ids from the vocab
-                init_token_ids = torch.randint(
-                    0, vocab_size,(self.num_tokens,), dtype=torch.long
-                ).to(model.device)
+                # Get the Vocabulary Size
+                vocab_size = word_embeddings.num_embeddings
 
-            # Compute embeddings for init_token_ids
-            word_embedding_weights = word_embeddings(init_token_ids).detach().clone().to(model.dtype)
+                # If init_text is provided (then we initialize soft prompt using init_text)
+                if init_text is not None:
 
-            # Create a Module Parameter using the computed token embeddings
-            self.prompt_embeddings = nn.Parameter(word_embedding_weights.to(model.device))
+                    # Tokenize init_text without special tokens
+                    init_token_ids = tokenizer(init_text, add_special_tokens=False)["input_ids"]
 
-            # Keep copies of initial token ids and token embeddings
-            self.initial_tokens = copy.deepcopy(init_token_ids)
-            self.initial_embeddings = copy.deepcopy(word_embedding_weights)
+                    # Calculate the total num of text tokens
+                    num_text_tokens = len(init_token_ids)
+
+                    # If num of text tokens greater than num of soft prompt tokens
+                    if num_text_tokens > num_tokens:
+
+                        # Then trim the text tokens to the size of num of soft prompt tokens
+                        init_token_ids = init_token_ids[:num_tokens]
+
+                    # If num of text tokens is less than num of soft prompt tokens
+                    elif num_text_tokens < num_tokens:
+
+                        # Find number of times to repeat the token ids
+                        num_reps = math.ceil(num_tokens / num_text_tokens)
+
+                        # Repeat the token ids until its equivalent to the number of soft prompt tokens
+                        init_token_ids = init_token_ids * num_reps
+
+                    # Perform the trimming again just to be certain that the token ids do not exceed num of soft prompt tokens
+                    init_token_ids = init_token_ids[:num_tokens]
+
+                    # Convert the token ids to a Long Tensor
+                    # and move to the same device as word embedding matrix
+                    init_token_ids = torch.LongTensor(init_token_ids).to(word_embeddings.weight.device)
+                
+                # If Random Init is requested
+                else:
+
+                    # Randomly sample "num_tokens" token_ids from the vocab
+                    init_token_ids = torch.randint(
+                        0, vocab_size,(self.num_tokens,), dtype=torch.long
+                    ).to(model.device)
+
+                # Compute embeddings for init_token_ids
+                word_embedding_weights = word_embeddings(init_token_ids).detach().clone().to(model.dtype)
+
+                # Create a Module Parameter using the computed token embeddings
+                self.prompt_embeddings = nn.Parameter(word_embedding_weights.to(model.device))
+
+                # Keep copies of initial token ids and token embeddings
+                self.initial_tokens = copy.deepcopy(init_token_ids)
+                self.initial_embeddings = copy.deepcopy(word_embedding_weights)
 
         # If a path to pretrained soft prompts are provided
         else:
@@ -202,7 +223,9 @@ class SoftPrompt(nn.Module):
         self.initial_tokens = state_dict['initial_tokens']
         self.initial_embeddings = state_dict['initial_embeddings']
         self.num_tokens = state_dict['num_tokens']
-        self.prompt_embeddings = state_dict['prompt_embeddings'].squeeze(0)
+        
+        # Wrap the tensor of soft prompts into a learnable Parameter
+        self.prompt_embeddings = nn.Parameter(state_dict['prompt_embeddings'].squeeze(0))
 
 
     # NOTE: Unused Code?

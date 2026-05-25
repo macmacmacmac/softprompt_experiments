@@ -1,14 +1,17 @@
 import random
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from tqdm import tqdm
 from typing import List, Dict
-
+import pickle
 
 # Determine DEVICE and DTYPE
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
+
+# Load Few Shot Example Instructions 
+with open('./paraphrased_instructions_few_shot_pool.pkl', 'rb') as f:
+    SUPERNAT_PARAPHRASED_INSTRUCTIONS = pickle.load(f)
 
 # Few Shot Examples for Classification for creating Target Prompts
 FEW_SHOT_EXAMPLES = [
@@ -33,6 +36,8 @@ FEW_SHOT_EXAMPLES_DOD = [
     "left or right"   
 ]
 
+# TODO: Load all Unique Instructions from the Super-NaturalInstructions dataset
+
 
 # Combination of All Layers for Patchscopes Experiment
 ALL_LAYER_COMBINATIONS = [
@@ -42,12 +47,12 @@ ALL_LAYER_COMBINATIONS = [
 
 # Best Patches of Layer Combinations for Patchscopes Experiment
 BEST_PATCHES = [
-    {"min_source": -1, "max_source": -1, "min_target": -1, "max_target": -1},
+    # {"min_source": -1, "max_source": -1, "min_target": -1, "max_target": -1},
     # {"min_source": 10, "max_source": 10, "min_target": 0, "max_target": 0},
     # {"min_source": 5, "max_source": 5, "min_target": 24, "max_target": 24},
     # {"min_source": 6, "max_source": 6, "min_target": 26, "max_target": 26},
     # {"min_source": 22, "max_source": 22, "min_target": 28, "max_target": 28},
-    {"min_source": 13, "max_source": 15, "min_target": 24, "max_target": 26}
+    {"min_source": 13, "max_source": 15, "min_target": 13, "max_target": 15}
 ]
 
 
@@ -82,6 +87,9 @@ def elicit_description_using_inspect_technique(
         for comb in combinations
     )
 
+    # Run soft prompt through the model and capture hidden states at every layer
+    hs_cache, _ = build_soft_hs_cache(soft_prompt, model, tokenizer, num_tokens)
+
     with tqdm(total=total_iterations, desc="Patchscopes experiments") as pbar:
         # For each combination
         for comb in combinations:
@@ -102,7 +110,8 @@ def elicit_description_using_inspect_technique(
                         source_layer, 
                         target_layer,
                         end_token,
-                        target_prompt_type
+                        target_prompt_type,
+                        hs_cache
                     )
 
                     # Append the experiment output to the results list
@@ -123,6 +132,8 @@ def create_target_prompt(num_tokens: int, target_prompt_type: str, dataset_name:
     match target_prompt_type:
         case 'few_shot':
             return create_few_shot_prompt(num_tokens)
+        case 'few_shot_supernat':
+            return create_few_shot_prompt_super_nat(num_tokens)
         case 'cot':
             # Find a random test example from the test dataset 
             # TODO: Change this to the DoD dataset instead of using InSPEcT datasets, as the soft prompt is trained on DoD
@@ -140,6 +151,15 @@ def create_few_shot_prompt(num_tokens, separator='|', seed=47):
     selected_examples = random.sample(FEW_SHOT_EXAMPLES, 3)
     separator = " " + separator + " "
     prompt = separator.join(selected_examples) + separator[:-1] + " x" * num_tokens
+    return prompt
+
+
+def create_few_shot_prompt_super_nat(num_tokens, separator='|', seed=47):
+    random.seed(seed)
+    selected_examples = [f"Instruction: {example}" for example in random.sample(SUPERNAT_PARAPHRASED_INSTRUCTIONS, 3)]
+    separator = " " + separator + " "
+    prompt = separator.join(selected_examples) + separator + "Instruction:" + " x" * num_tokens
+    # print(f"Super Natural Few Shot Target Prompt: \n\n{prompt}")
     return prompt
 
 
@@ -168,17 +188,15 @@ def perform_inspect_for_src_tgt_pair(
         source_layer, 
         target_layer,
         end_token,
-        target_prompt_type
+        target_prompt_type,
+        hs_cache
 ):
-    # TODO: Move this out of this code block as it will be called for the same soft prompt, multiple times
-    # Run soft prompt through the model and capture hidden states at every layer
-    hs_cache, _ = build_soft_hs_cache(soft_prompt, model, tokenizer, num_tokens)
 
     # Tokenize the target prompt
     target_inp = tokenizer(target_prompt, return_tensors="pt").to(DEVICE)
 
     # Determine target position based on target prompt type
-    if target_prompt_type == 'few_shot':
+    if target_prompt_type == 'few_shot' or target_prompt_type == "few_shot_supernat":
         # Calculate position for patching (at placeholder token (x) positions)
         target_position = target_inp["input_ids"].shape[1] - num_tokens # Can add -1 for the ":" in the end
 
@@ -277,8 +295,18 @@ def set_soft_prompt_patch_hook(model, soft_prompt, source_position, num_of_token
         def hook(module, input, output):
             # (batch, sequence, hidden_state)
             if model.config.model_type == "llama":
+
+                # print()
+                # print(f"Module: {module}")
+                # print(f"type of output: {type(output)}")
+                # print(f"output.shape: {output.shape}")
+                # print(f"output[0].shape: {output[0].shape}")
+                # print(f"soft_prompt shape: {soft_prompt.shape}")
+                # print(f"------------")
+
                 # output[0][0, source_position : source_position + num_of_tokens] = soft_prompt     #NOTE: A Bug Maybe, as it is straightforwardly incompatible...
-                output[0][source_position : source_position + num_of_tokens] = soft_prompt
+                # output[0][source_position : source_position + num_of_tokens] = soft_prompt
+                output[:, source_position : source_position + num_of_tokens] = soft_prompt
             
             else:
                 raise ValueError(f"Unknown model: {model.config.model_type}")
@@ -334,22 +362,45 @@ def generate_greedy_deterministic(hs_patch_config,
     input_ids = inp["input_ids"].detach().clone().to(DEVICE)
 
     # Without this, we mostly get warnings
-    model.set_attn_implementation('eager')
+    # model.set_attn_implementation('eager')
+
+    # Start with None, which forces the model to prefill the cache on step 1
+    past_key_values = None
+
+    # We only feed to the model the tokens it hasn't seen yet.
+    # On step 1, it's the full prompt. On step 2+, it's only the 1 newest token.
+    current_input_ids = input_ids
 
     # Freeze all gradient calculation
     with torch.no_grad():
         for step in range(max_length):
-            patch_hooks = set_hs_patch_hooks(model, hs_patch_config, num_of_tokens) 
-            outputs = model(input_ids, output_attentions=True, output_hidden_states=True)
-            remove_hooks(patch_hooks)
+            # patch_hooks = set_hs_patch_hooks(model, hs_patch_config, num_of_tokens) 
+            # outputs = model(input_ids, output_attentions=True, output_hidden_states=True)
+
+            # ONLY hook on the first step (the full prefill prompt)
+            if step == 0:
+                patch_hooks = set_hs_patch_hooks(model, hs_patch_config, num_of_tokens) 
+
+            # No need for attentions and hidden states
+            outputs = model(
+                # input_ids,
+                current_input_ids,
+                past_key_values = past_key_values,
+                use_cache=True,
+                output_attentions=False, 
+                output_hidden_states=False
+            )
+
+            # ONLY remove hooks on the first step
+            if step == 0:
+                remove_hooks(patch_hooks)
+
+            # Update cache for the next loop iteration
+            past_key_values = outputs.past_key_values
             
             # Extract logits for the last token
             # output.logits has shape                       # (1, seq_len, vocab_size)
             logits = outputs.logits[:, -1, :]               # (1, vocab_size)
-
-            # Compute probablilities (before temp scaling)
-            # Apply softmax to the last dim (which is vocab dim)
-            raw_probs = torch.softmax(logits, dim = -1)     # (1, vocab_size)
 
             # Get the next token id using the logits
             if do_sample:
@@ -366,6 +417,9 @@ def generate_greedy_deterministic(hs_patch_config,
             # Concat the next token id to the input_ids for autoregressive generation
             input_ids = torch.cat([input_ids, next_token_id.unsqueeze(0)], dim=-1)
 
+            # Setup for next iteration: only pass the 1 newly generated token
+            current_input_ids = next_token_id.unsqueeze(0)
+
             # If the end_token is predicted, break out of the autoregression loop
             if next_token_id.item() == end_token:
                 break
@@ -379,8 +433,17 @@ def set_hs_patch_hooks(model, hs_patch_config, num_of_tokens):
     def patch_hs(name, position_hs):
         def hook(module, input, output):
             for position_, hs_ in position_hs:
+                
+                # print(f"Module: {module}")
+                # print(f"type of output: {type(output)}")
+                # print(f"output.shape: {output.shape}")
+                # print(f"output[0].shape: {output[0].shape}")
+                # print(f"hs_ shape: {hs_.shape}")
+                # print(f"------------")
+
                 # (batch, sequence, hidden_state)
-                output[0][position_ : position_ + num_of_tokens] = hs_
+                # output[0][position_ : position_ + num_of_tokens] = hs_
+                output[:, position_: position_ + num_of_tokens] = hs_
         return hook
 
     hooks = []

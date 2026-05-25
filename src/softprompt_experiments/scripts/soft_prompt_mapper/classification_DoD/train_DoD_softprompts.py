@@ -101,7 +101,7 @@ class CausalLMBatchCollator:
         for i, (inp, tgt) in enumerate(zip(inputs, targets)):
 
             # Tokenize just the input text to find out how long it is
-            inp_len = len(self.tokenizer(inp, add_special_tokens=True)["input_ids"])
+            inp_len = len(self.tokenizer.encode(inp, add_special_tokens=True))
             
             # Mask the input portion so loss is not calculated on it
             labels[i, :inp_len] = -100
@@ -162,6 +162,7 @@ def run(args_list):
 
     # Create Parent Directory to save all soft prompts for this Dataset
     DB_NAME = DB_PATH.split("/")[-1].split(".")[0]
+    DB_NAME = DB_NAME + "_custom_sample_vocab"
     PARENT_DIR = f"{SAVE_DIR}/{DB_NAME}"
     os.makedirs(PARENT_DIR, exist_ok=True)
 
@@ -282,7 +283,8 @@ def run(args_list):
             model = llama_model,
             tokenizer = llama_tokenizer,
             word_embeddings = llama_word_embeddings,
-            num_tokens = NUM_TOKENS
+            num_tokens = NUM_TOKENS,
+            # init_randomly=True
         ).to(DEVICE)
 
         # Init Optimizer with only params from Soft Prompt
@@ -319,7 +321,7 @@ def run(args_list):
                 input_ids = batch["input_ids"].to(DEVICE)                                       # (batch_size, seq_len)
                 attention_mask = batch["attention_mask"].to(DEVICE)                             # (batch_size, seq_len)
                 labels = batch["labels"].to(DEVICE)                                             # (batch_size, soft_prompt_len + seq_len)
-                
+
                 # Get the text embeddings from Llama
                 with torch.no_grad():
                     text_embeds = llama_word_embeddings(input_ids).detach()
