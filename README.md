@@ -12,13 +12,28 @@ pip install -r requirements.txt -e .
 ```
 
 ## Command for reproducing experiments
-
-Example Usage
+Example Usage 
 ```bash
-python -m run_experiment --scripts dataset_math_custom softprompt_generator_regression softprompt_verbalizer --save_directory ./datasets/<folder name>
+python -m run_experiment --scripts \
+  soft_prompt_mapper.supernat_instruct_DoD.train_softprompts \
+  soft_prompt_mapper.supernat_instruct_DoD.compile_mapper_dataset \
+  soft_prompt_mapper.supernat_instruct_DoD.train_mapper \
+  soft_prompt_mapper.supernat_instruct_DoD.test_mapper
+```
+This will:
+1. Train softprompts
+2. Compile trained softprompts into a dataset for translator
+3. Train the translator
+4. Test the translator
+
+You can also call these scripts individually like
+```bash
+python -m run_experiment --scripts soft_prompt_mapper.supernat_instruct_DoD.train_softprompts
 ```
 
-This will build the dataset, train the soft prompts, and generate verbalizations. In that order.
+## Misc
+
+All our scripts use the word 'mapper' interchangeably with 'translator'
 
 ## Scripts for Classification DoD
 
