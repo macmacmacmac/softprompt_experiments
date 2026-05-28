@@ -2,13 +2,13 @@
 #SBATCH -N 1
 #SBATCH -n 8
 #SBATCH --mem=16g
-#SBATCH -J "25-start"
-#SBATCH -p long
-#SBATCH -t 5-00:00:00
+#SBATCH -J "30tokens"
+#SBATCH -p short
+#SBATCH -t 1-00:00:00
 #SBATCH --gres=gpu:1
 #SBATCH -C A100
-#SBATCH -o 25-start.out
-#SBATCH -e 25-start.out
+#SBATCH -o 30-tokens.out
+#SBATCH -e 30-tokens.out
 
 # -----------------------------
 # Load Required Modules
@@ -37,7 +37,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 # -----------------------------
 # Run the Job (Example: Python Script / Module)
 # -----------------------------
-python -u -m run_experiment --scripts soft_prompt_mapper.supernat_instruct_DoD.train_softprompts --start_percent 25 --run_percent 25
+python -u -m run_experiment --scripts soft_prompt_mapper.supernat_instruct_DoD.train_mapper --num_tokens 30 --mapper_dataset_path "./datasets/mapper_training_dataset/SuperNatural-30-tokens"
 # python -u -m run_experiment --scripts soft_prompt_mapper.supernat_instruct_DoD.apply_InSPEcT_on_DoD --peft
 # python -u -m run_experiment --scripts soft_prompt_mapper.supernat_instruct_DoD.generate_paraphrasals
 # python -u -m run_experiment --scripts soft_prompt_mapper.classification_DoD.inference_mapper_dataset

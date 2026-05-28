@@ -8,6 +8,7 @@ import pandas as pd
 from tqdm import tqdm
 import evaluate
 import json
+from sentence_transformers import SentenceTransformer, util
 
 # Driver Code
 def run(args_list=None):
@@ -21,6 +22,7 @@ def run(args_list=None):
     # Perform CLI Argument Parsing
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
+    parser.add_argument("--sentence_transformer", type=str, default="all-MiniLM-L6-v2")
     parser.add_argument("--mapper_dataset_path", type=str, default="./datasets/mapper_training_dataset/General-DoD")
     parser.add_argument("--sample", action='store_true', help="Use a sample of val dataset instead of the full val dataset")
     parser.add_argument("--lora_dir", type=str, default="./mapper_lora_weights/General-DoD")
@@ -50,6 +52,7 @@ def run(args_list=None):
 
     # Load Rouge Metric
     ROUGE_METRIC = evaluate.load("rouge")
+    SENTENCE_TRANSFORMER = SentenceTransformer(args.sentence_transformer, device=DEVICE)
 
     # ┌───────────────────────────────────────────────┐
     # │                   DATASET PREP                │
@@ -88,7 +91,8 @@ def run(args_list=None):
     print("="*80 + "\n")
 
     results_data = []
-
+    cosine_sim_list = []
+    rouge_L_list = []
     with torch.no_grad():
         for i in tqdm(range(0, len(test_samples), BATCH_SIZE), desc="Mapping Soft Prompt Batches"):
             batch_samples = test_samples[i : i + BATCH_SIZE]
@@ -130,6 +134,18 @@ def run(args_list=None):
                 use_aggregator=False
             )
             rouge_l_scores = rouge_results['rougeL']
+
+            # Compute Cosine Similarity with the hard prompt
+            pred_embeddings = SENTENCE_TRANSFORMER.encode(pred_texts, convert_to_tensor=True)
+            ref_embeddings = SENTENCE_TRANSFORMER.encode(hard_prompts, convert_to_tensor=True)
+            
+            # util.cos_sim computes all pairs, so we take the diagonal for our 1:1 batch pairs
+            cosine_scores = util.cos_sim(pred_embeddings, ref_embeddings)
+            cosine_sims = torch.diag(cosine_scores).tolist()
+
+
+            cosine_sim_list.extend(cosine_sims)
+            rouge_L_list.extend(rouge_l_scores)
             
             # Process and store results for each sample in the batch
             for j in range(len(batch_samples)):
@@ -139,8 +155,17 @@ def run(args_list=None):
                     "hard_prompt": hard_prompts[j],
                     "verbalization": pred_texts[j],
                     "verbalization_rouge_l": rouge_l_scores[j],
+                    "verbalization_cosine_sim": cosine_sims[j],
                     "instances": instances_list[j]
                 })
+
+    # Compute Average Metrics
+    avg_rouge_L = sum(rouge_L_list) / len(rouge_L_list)
+    avg_cos_sim = sum(cosine_sim_list) / len(cosine_sim_list)
+
+    print(f"Avg ROUGE-L: {avg_rouge_L}")
+    print(f"Avg Cosine Sim: {avg_cos_sim}")
+
 
     # Save to JSON
     print(f"\nSaving results to {OUTPUT_JSON_PATH}...")
