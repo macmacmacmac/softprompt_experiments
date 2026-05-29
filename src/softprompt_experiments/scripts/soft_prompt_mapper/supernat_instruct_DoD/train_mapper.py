@@ -23,9 +23,8 @@ class MapperDataset(Dataset):
 
 # Custom Data Collator for the Mapper Dataset
 class MapperCollator:
-    def __init__(self, tokenizer, soft_prompt_length=20):
+    def __init__(self, tokenizer):
         self.tokenizer = tokenizer
-        self.soft_prompt_length = soft_prompt_length
 
     def __call__(self, batch):
         # Retrieve list of soft_prompts and hard_prompts (in that order)
@@ -152,8 +151,7 @@ def run(args_list=None):
 
     # Init Collator
     collator = MapperCollator(
-        tokenizer = tokenizer, 
-        soft_prompt_length = NUM_TOKENS
+        tokenizer = tokenizer
     )
 
     # Init Training Dataloader
